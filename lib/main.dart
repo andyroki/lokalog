@@ -19,12 +19,44 @@ class LokaLogApp extends StatefulWidget {
 }
 
 class _LokaLogAppState extends State<LokaLogApp> {
+  static const MethodChannel _prefChannel = MethodChannel('lokalog/location');
+  static const String _darkModePreferenceKey = 'pref_dark_mode';
   ThemeMode _themeMode = ThemeMode.light;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadDarkMode());
+  }
+
+  Future<void> _loadDarkMode() async {
+    try {
+      final String? value = await _prefChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _darkModePreferenceKey},
+      );
+      if (value == null || !mounted) {
+        return;
+      }
+      setState(() {
+        _themeMode = value == 'true' ? ThemeMode.dark : ThemeMode.light;
+      });
+    } catch (_) {
+      // Use default if load fails.
+    }
+  }
 
   void _setDarkMode(bool enabled) {
     setState(() {
       _themeMode = enabled ? ThemeMode.dark : ThemeMode.light;
     });
+    unawaited(_prefChannel.invokeMethod<void>(
+      'saveSites',
+      <String, dynamic>{
+        'key': _darkModePreferenceKey,
+        'value': enabled.toString(),
+      },
+    ));
   }
 
   @override
@@ -70,6 +102,7 @@ class ScenarioPage extends StatefulWidget {
 class _ScenarioPageState extends State<ScenarioPage> {
   static const MethodChannel _locationChannel =
       MethodChannel('lokalog/location');
+  static const String _debugModePreferenceKey = 'pref_debug_mode';
   static const int _trackingIntervalSeconds = 5;
   static const int _maxSavedLocations = 5;
   static const int _requiredStableSamples = 3;
@@ -101,7 +134,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   int _stableSamples = 0;
   bool _isTracking = false;
   int _selectedTabIndex = 0;
-  bool _debugModeEnabled = true;
+  bool _debugModeEnabled = false;
+  bool _isFetchingCurrentLocation = false;
   DateTime? _lastFixAt;
   SiteDistance? _latestNearest;
 
@@ -119,7 +153,25 @@ class _ScenarioPageState extends State<ScenarioPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_loadDebugMode());
     unawaited(_loadSites());
+  }
+
+  Future<void> _loadDebugMode() async {
+    try {
+      final String? value = await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _debugModePreferenceKey},
+      );
+      if (value == null || !mounted) {
+        return;
+      }
+      setState(() {
+        _debugModeEnabled = value == 'true';
+      });
+    } catch (_) {
+      // Keep default if load fails.
+    }
   }
 
   List<JobSite> _defaultSites() {
@@ -914,6 +966,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return Icons.bug_report;
   }
 
+  bool _hasMissingRequiredLocationFields(_AddLocationInput input) {
+    return input.name.trim().isEmpty ||
+        input.street.trim().isEmpty ||
+        input.city.trim().isEmpty ||
+        input.state.trim().isEmpty ||
+        input.zip.trim().isEmpty;
+  }
+
   Future<void> _onAddNewLocation() async {
     if (_sites.length >= _maxSavedLocations) {
       if (!mounted) {
@@ -952,11 +1012,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         return;
       }
 
-      if (result.name.isEmpty ||
-          result.street.isEmpty ||
-          result.city.isEmpty ||
-          result.state.isEmpty ||
-          result.zip.isEmpty) {
+      if (_hasMissingRequiredLocationFields(result)) {
         prefill = result;
         sheetError = 'Please fill name, street, city, state, and ZIP.';
         continue;
@@ -1014,81 +1070,460 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
   }
 
-  Future<void> _onEditLocation(int index, JobSite site) async {
-    final _AddLocationInput? result =
-        await showModalBottomSheet<_AddLocationInput>(
-      context: context,
-      isScrollControlled: true,
-      builder: (BuildContext sheetContext) {
-        return _AddLocationSheet(
-          title: 'Edit Location',
-          submitLabel: 'Save',
-          logMinuteOptions: _logMinuteOptions,
-          initialInput: _AddLocationInput(
-            name: site.name,
-            street: site.street,
-            city: site.city,
-            state: site.state,
-            zip: site.zip,
-            requiredMinutes: site.requiredDwellMinutes,
-          ),
-        );
+  Future<LocationFix?> _readCurrentLocationForAdd() async {
+    if (!Platform.isAndroid) {
+      if (!mounted) {
+        return null;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Current GPS lookup is available on Android only.'),
+        ),
+      );
+      return null;
+    }
+
+    bool serviceEnabled = false;
+    try {
+      serviceEnabled = (await _locationChannel
+              .invokeMethod<bool>('isLocationServiceEnabled')) ??
+          false;
+    } on PlatformException {
+      serviceEnabled = false;
+    }
+    if (!serviceEnabled) {
+      if (!mounted) {
+        return null;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Location services are off. Turn on GPS and try again.'),
+        ),
+      );
+      return null;
+    }
+
+    final bool granted = (await _locationChannel
+            .invokeMethod<bool>('checkAndRequestPermission')) ??
+        false;
+    if (!granted) {
+      if (!mounted) {
+        return null;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Location permission is required to use current GPS.'),
+        ),
+      );
+      return null;
+    }
+
+    try {
+      final Map<Object?, Object?>? position = await _locationChannel
+          .invokeMethod<Map<Object?, Object?>>('getCurrentLocation')
+          .timeout(const Duration(seconds: 12));
+      final double? lat = (position?['latitude'] as num?)?.toDouble();
+      final double? lng = (position?['longitude'] as num?)?.toDouble();
+      if (lat == null || lng == null) {
+        return null;
+      }
+      return LocationFix(
+        lat: lat,
+        lng: lng,
+        accuracyMeters: ((position?['accuracy'] as num?)?.toDouble() ?? 999),
+        speedMetersPerSecond: max(
+          0,
+          ((position?['speed'] as num?)?.toDouble() ?? 0),
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<_AddLocationInput?> _reverseLookupAddress(LocationFix fix) async {
+    final Uri uri = Uri.https(
+      'nominatim.openstreetmap.org',
+      '/reverse',
+      <String, String>{
+        'lat': fix.lat.toString(),
+        'lon': fix.lng.toString(),
+        'format': 'jsonv2',
+        'addressdetails': '1',
       },
     );
 
-    if (result == null || !mounted) {
+    try {
+      final http.Response response = await http.get(
+        uri,
+        headers: <String, String>{
+          'User-Agent': 'lokalog-app/1.0 (mobile field logging demo)',
+          'Accept': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 12));
+
+      if (response.statusCode != 200) {
+        return null;
+      }
+
+      final dynamic decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+
+      final dynamic addressRaw = decoded['address'];
+      if (addressRaw is! Map<String, dynamic>) {
+        return null;
+      }
+
+      final String houseNumber =
+          (addressRaw['house_number'] ?? '').toString().trim();
+      final String road = ((addressRaw['road'] ??
+                  addressRaw['pedestrian'] ??
+                  addressRaw['footway'] ??
+                  addressRaw['path'] ??
+                  addressRaw['residential'] ??
+                  '')
+              .toString())
+          .trim();
+      final String street =
+          [houseNumber, road].where((String part) => part.isNotEmpty).join(' ');
+
+      final String city = ((addressRaw['city'] ??
+                  addressRaw['town'] ??
+                  addressRaw['village'] ??
+                  addressRaw['hamlet'] ??
+                  addressRaw['county'] ??
+                  '')
+              .toString())
+          .trim();
+
+        final String stateCode =
+          (addressRaw['state_code'] ?? '').toString().trim().toUpperCase();
+        final String stateName = ((addressRaw['state'] ??
+              addressRaw['region'] ??
+              addressRaw['state_district'] ??
+              addressRaw['province'] ??
+              '')
+            .toString())
+          .trim()
+          .toUpperCase();
+        final String isoStateCode = ((addressRaw['ISO3166-2-lvl4'] ??
+              addressRaw['ISO3166-2-lvl5'] ??
+              addressRaw['ISO3166-2-lvl6'] ??
+              addressRaw['ISO3166-2-lvl7'] ??
+              addressRaw['ISO3166-2-lvl8'] ??
+              '')
+            .toString())
+          .trim()
+          .toUpperCase();
+      String state =
+          stateCode.contains('-') ? stateCode.split('-').last : stateCode;
+        if (state.isEmpty && isoStateCode.isNotEmpty) {
+        state = isoStateCode.contains('-')
+          ? isoStateCode.split('-').last
+          : isoStateCode;
+        }
+      if (state.isEmpty) {
+        const Map<String, String> usStateCodes = <String, String>{
+          'ALABAMA': 'AL',
+          'ALASKA': 'AK',
+          'ARIZONA': 'AZ',
+          'ARKANSAS': 'AR',
+          'CALIFORNIA': 'CA',
+          'COLORADO': 'CO',
+          'CONNECTICUT': 'CT',
+          'DELAWARE': 'DE',
+          'FLORIDA': 'FL',
+          'GEORGIA': 'GA',
+          'HAWAII': 'HI',
+          'IDAHO': 'ID',
+          'ILLINOIS': 'IL',
+          'INDIANA': 'IN',
+          'IOWA': 'IA',
+          'KANSAS': 'KS',
+          'KENTUCKY': 'KY',
+          'LOUISIANA': 'LA',
+          'MAINE': 'ME',
+          'MARYLAND': 'MD',
+          'MASSACHUSETTS': 'MA',
+          'MICHIGAN': 'MI',
+          'MINNESOTA': 'MN',
+          'MISSISSIPPI': 'MS',
+          'MISSOURI': 'MO',
+          'MONTANA': 'MT',
+          'NEBRASKA': 'NE',
+          'NEVADA': 'NV',
+          'NEW HAMPSHIRE': 'NH',
+          'NEW JERSEY': 'NJ',
+          'NEW MEXICO': 'NM',
+          'NEW YORK': 'NY',
+          'NORTH CAROLINA': 'NC',
+          'NORTH DAKOTA': 'ND',
+          'OHIO': 'OH',
+          'OKLAHOMA': 'OK',
+          'OREGON': 'OR',
+          'PENNSYLVANIA': 'PA',
+          'RHODE ISLAND': 'RI',
+          'SOUTH CAROLINA': 'SC',
+          'SOUTH DAKOTA': 'SD',
+          'TENNESSEE': 'TN',
+          'TEXAS': 'TX',
+          'UTAH': 'UT',
+          'VERMONT': 'VT',
+          'VIRGINIA': 'VA',
+          'WASHINGTON': 'WA',
+          'WEST VIRGINIA': 'WV',
+          'WISCONSIN': 'WI',
+          'WYOMING': 'WY',
+          'DISTRICT OF COLUMBIA': 'DC',
+        };
+          state = usStateCodes[stateName] ??
+            (stateName.length == 2
+              ? stateName
+              : (stateName.isNotEmpty ? stateName : ''));
+      }
+      final String zip = (addressRaw['postcode'] ?? '').toString().trim();
+
+      if (street.isEmpty && city.isEmpty && state.isEmpty && zip.isEmpty) {
+        return null;
+      }
+
+      return _AddLocationInput(
+        name: '',
+        street: street,
+        city: city,
+        state: state,
+        zip: zip,
+        requiredMinutes:
+            _logMinuteOptions.contains(20) ? 20 : _logMinuteOptions.first,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _onAddFromCurrentLocation() async {
+    if (_sites.length >= _maxSavedLocations || _isFetchingCurrentLocation) {
+      if (!mounted) {
+        return;
+      }
+      if (_sites.length >= _maxSavedLocations) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Only $_maxSavedLocations locations are allowed. Delete one to add another.',
+            ),
+          ),
+        );
+      }
       return;
     }
 
-    if (result.name.isEmpty ||
-        result.street.isEmpty ||
-        result.city.isEmpty ||
-        result.state.isEmpty ||
-        result.zip.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please fill name, street, city, state, and ZIP.')),
-      );
-      return;
-    }
+    setState(() {
+      _isFetchingCurrentLocation = true;
+    });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Looking up updated latitude/longitude...')),
+      const SnackBar(content: Text('Reading current GPS location...')),
     );
-
-    final _GeocodePoint? point = await _lookupCoordinates(result);
+    final LocationFix? fix = await _readCurrentLocationForAdd();
     if (!mounted) {
       return;
     }
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
-    if (point == null) {
+    if (fix == null) {
+      setState(() {
+        _isFetchingCurrentLocation = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content:
-              Text('Could not geocode address. Please verify and try again.'),
+              Text('Could not get current GPS location. Please try again.'),
         ),
       );
       return;
     }
 
-    final JobSite updatedSite = JobSite(
-      name: result.name,
-      street: result.street,
-      city: result.city,
-      state: result.state,
-      zip: result.zip,
-      lat: point.lat,
-      lng: point.lng,
-      requiredDwellMinutes: result.requiredMinutes,
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Looking up address from GPS...')),
     );
+    final _AddLocationInput? reversePrefill = await _reverseLookupAddress(fix);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
-    setState(() {
-      _sites[index] = updatedSite;
-      _status =
-          'Updated location: ${updatedSite.name} at ${updatedSite.address} (${result.requiredMinutes}m).';
-    });
-    unawaited(_saveSites());
+    _AddLocationInput? prefill = reversePrefill ??
+        _AddLocationInput(
+          name: '',
+          street: '',
+          city: '',
+          state: '',
+          zip: '',
+          requiredMinutes:
+              _logMinuteOptions.contains(20) ? 20 : _logMinuteOptions.first,
+        );
+    String? sheetError = reversePrefill == null
+        ? 'Could not detect full address from GPS. Please enter or correct it.'
+        : 'Confirm the address and enter a name.';
+
+    while (true) {
+      final _AddLocationInput? result =
+          await showModalBottomSheet<_AddLocationInput>(
+        context: context,
+        isScrollControlled: true,
+        builder: (BuildContext sheetContext) {
+          return _AddLocationSheet(
+            title: 'Add From Current Location',
+            submitLabel: 'Add',
+            logMinuteOptions: _logMinuteOptions,
+            initialInput: prefill,
+            errorMessage: sheetError,
+          );
+        },
+      );
+
+      if (result == null || !mounted) {
+        setState(() {
+          _isFetchingCurrentLocation = false;
+        });
+        return;
+      }
+
+      if (_hasMissingRequiredLocationFields(result)) {
+        prefill = result;
+        sheetError = 'Please fill name, street, city, state, and ZIP.';
+        continue;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Verifying address coordinates...')),
+      );
+      final _GeocodePoint? point = await _lookupCoordinates(result);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      if (point == null) {
+        prefill = result;
+        sheetError =
+            'Could not find that address. Please correct it and try again.';
+        continue;
+      }
+
+      if (_sites.length >= _maxSavedLocations) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Only $_maxSavedLocations locations are allowed. Delete one to add another.',
+            ),
+          ),
+        );
+        setState(() {
+          _isFetchingCurrentLocation = false;
+        });
+        return;
+      }
+
+      final JobSite newSite = JobSite(
+        name: result.name,
+        street: result.street,
+        city: result.city,
+        state: result.state,
+        zip: result.zip,
+        lat: point.lat,
+        lng: point.lng,
+        requiredDwellMinutes: result.requiredMinutes,
+      );
+
+      setState(() {
+        _sites.add(newSite);
+        _isFetchingCurrentLocation = false;
+        _status =
+            'Added location from current GPS: ${newSite.name} at ${newSite.address} (${result.requiredMinutes}m).';
+      });
+      unawaited(_saveSites());
+      return;
+    }
+  }
+
+  Future<void> _onEditLocation(int index, JobSite site) async {
+    _AddLocationInput? prefill = _AddLocationInput(
+      name: site.name,
+      street: site.street,
+      city: site.city,
+      state: site.state,
+      zip: site.zip,
+      requiredMinutes: site.requiredDwellMinutes,
+    );
+    String? sheetError;
+
+    while (true) {
+      final _AddLocationInput? result =
+          await showModalBottomSheet<_AddLocationInput>(
+        context: context,
+        isScrollControlled: true,
+        builder: (BuildContext sheetContext) {
+          return _AddLocationSheet(
+            title: 'Edit Location',
+            submitLabel: 'Save',
+            logMinuteOptions: _logMinuteOptions,
+            initialInput: prefill,
+            errorMessage: sheetError,
+          );
+        },
+      );
+
+      if (result == null || !mounted) {
+        return;
+      }
+
+      if (_hasMissingRequiredLocationFields(result)) {
+        prefill = result;
+        sheetError = 'Please fill name, street, city, state, and ZIP.';
+        continue;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Looking up updated latitude/longitude...')),
+      );
+
+      final _GeocodePoint? point = await _lookupCoordinates(result);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      if (point == null) {
+        prefill = result;
+        sheetError = 'Could not geocode address. Please verify and try again.';
+        continue;
+      }
+
+      final JobSite updatedSite = JobSite(
+        name: result.name,
+        street: result.street,
+        city: result.city,
+        state: result.state,
+        zip: result.zip,
+        lat: point.lat,
+        lng: point.lng,
+        requiredDwellMinutes: result.requiredMinutes,
+      );
+
+      setState(() {
+        _sites[index] = updatedSite;
+        _status =
+            'Updated location: ${updatedSite.name} at ${updatedSite.address} (${result.requiredMinutes}m).';
+      });
+      unawaited(_saveSites());
+      return;
+    }
   }
 
   Future<void> _onDeleteLocation(int index, JobSite site) async {
@@ -1178,19 +1613,22 @@ class _ScenarioPageState extends State<ScenarioPage> {
           ),
         if (_latestNearest != null)
           Card(
-            color: Colors.blue.shade50,
+            color: Theme.of(context).colorScheme.secondaryContainer,
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Text(
                 'Countdown to log ${_latestNearest!.site.name}: '
                 '${_minutesRemainingToLog(_latestNearest!.site).toStringAsFixed(1)} minutes remaining',
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                ),
               ),
             ),
           ),
         if (_pendingSite != null)
           Card(
-            color: Colors.amber.shade50,
+            color: Theme.of(context).colorScheme.tertiaryContainer,
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -1198,10 +1636,18 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 children: <Widget>[
                   Text(
                     'Confirm job at ${_pendingSite!.address}?',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.onTertiaryContainer,
+                    ),
                   ),
                   const SizedBox(height: 6),
-                  Text('Auto-log in ${_promptCountdown}s if no response.'),
+                  Text(
+                    'Auto-log in ${_promptCountdown}s if no response.',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onTertiaryContainer,
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   Row(
                     children: <Widget>[
@@ -1251,23 +1697,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
                   '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}',
                 ),
                 isThreeLine: true,
-                trailing: PopupMenuButton<String>(
-                  onSelected: (String action) {
-                    if (action == 'delete') {
-                      _onDeleteLogEntry(index, log);
-                    }
-                  },
-                  itemBuilder: (BuildContext context) =>
-                      const <PopupMenuEntry<String>>[
-                    PopupMenuItem<String>(
-                      value: 'delete',
-                      child: Text('Delete'),
-                    ),
-                  ],
-                  child: Icon(
-                    log.autoLogged ? Icons.flag : Icons.check_circle,
-                    color: log.autoLogged ? Colors.orange : Colors.green,
-                  ),
+                trailing: IconButton(
+                  tooltip: 'Delete log',
+                  onPressed: () => _onDeleteLogEntry(index, log),
+                  icon: const Icon(Icons.delete),
+                  color: Theme.of(context).colorScheme.error,
                 ),
               ),
             );
@@ -1292,6 +1726,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
                   _selectedTabIndex = 2;
                 }
               });
+              unawaited(_locationChannel.invokeMethod<void>(
+                'saveSites',
+                <String, dynamic>{
+                  'key': _debugModePreferenceKey,
+                  'value': enabled.toString(),
+                },
+              ));
             },
           ),
         ),
@@ -1599,16 +2040,36 @@ class _ScenarioPageState extends State<ScenarioPage> {
         ],
       ),
       floatingActionButton: _selectedTabIndex == 1
-          ? FloatingActionButton.extended(
-              onPressed: _sites.length >= _maxSavedLocations
-                  ? null
-                  : _onAddNewLocation,
-              icon: const Icon(Icons.add_location_alt),
-              label: Text(
-                _sites.length >= _maxSavedLocations
-                    ? 'Max 5 Reached'
-                    : 'Add New',
-              ),
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                FloatingActionButton.extended(
+                  onPressed: _sites.length >= _maxSavedLocations ||
+                          _isFetchingCurrentLocation
+                      ? null
+                      : _onAddFromCurrentLocation,
+                  icon: _isFetchingCurrentLocation
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.my_location),
+                  label: const Text('Current Location'),
+                ),
+                const SizedBox(width: 10),
+                FloatingActionButton.extended(
+                  onPressed: _sites.length >= _maxSavedLocations
+                      ? null
+                      : _onAddNewLocation,
+                  icon: const Icon(Icons.add_location_alt),
+                  label: Text(
+                    _sites.length >= _maxSavedLocations
+                        ? 'Max 5 Reached'
+                        : 'Add New',
+                  ),
+                ),
+              ],
             )
           : null,
       bottomNavigationBar: NavigationBar(
@@ -1810,6 +2271,7 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
   final TextEditingController _zipController = TextEditingController();
 
   int _selectedMinutes = 20;
+  String? _submitError;
 
   @override
   void initState() {
@@ -1860,6 +2322,14 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
     }).join(' ');
   }
 
+  bool _hasMissingRequiredValues(_AddLocationInput input) {
+    return input.name.trim().isEmpty ||
+        input.street.trim().isEmpty ||
+        input.city.trim().isEmpty ||
+        input.state.trim().isEmpty ||
+        input.zip.trim().isEmpty;
+  }
+
   void _submit() {
     final _AddLocationInput input = _AddLocationInput(
       name: _toTitleCase(_nameController.text),
@@ -1869,6 +2339,14 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
       zip: _zipController.text.trim(),
       requiredMinutes: _selectedMinutes,
     );
+
+    if (_hasMissingRequiredValues(input)) {
+      setState(() {
+        _submitError = 'Please fill name, street, city, state, and ZIP.';
+      });
+      return;
+    }
+
     Navigator.of(context).pop(input);
   }
 
@@ -1893,10 +2371,11 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                     style: const TextStyle(
                         fontSize: 18, fontWeight: FontWeight.bold),
                   ),
-                  if (widget.errorMessage != null) ...<Widget>[
+                  if (_submitError != null ||
+                      widget.errorMessage != null) ...<Widget>[
                     const SizedBox(height: 10),
                     Text(
-                      widget.errorMessage!,
+                      _submitError ?? widget.errorMessage!,
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.error,
                         fontWeight: FontWeight.w600,
@@ -1906,6 +2385,13 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _nameController,
+                    onChanged: (_) {
+                      if (_submitError != null) {
+                        setState(() {
+                          _submitError = null;
+                        });
+                      }
+                    },
                     textInputAction: TextInputAction.next,
                     decoration: const InputDecoration(
                       labelText: 'Client Name',
@@ -1916,6 +2402,13 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _streetController,
+                    onChanged: (_) {
+                      if (_submitError != null) {
+                        setState(() {
+                          _submitError = null;
+                        });
+                      }
+                    },
                     textInputAction: TextInputAction.next,
                     maxLines: 2,
                     decoration: const InputDecoration(
@@ -1931,6 +2424,13 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                         flex: 2,
                         child: TextFormField(
                           controller: _cityController,
+                          onChanged: (_) {
+                            if (_submitError != null) {
+                              setState(() {
+                                _submitError = null;
+                              });
+                            }
+                          },
                           textInputAction: TextInputAction.next,
                           decoration: const InputDecoration(
                             labelText: 'City',
@@ -1942,6 +2442,13 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                       Expanded(
                         child: TextFormField(
                           controller: _stateController,
+                          onChanged: (_) {
+                            if (_submitError != null) {
+                              setState(() {
+                                _submitError = null;
+                              });
+                            }
+                          },
                           textInputAction: TextInputAction.next,
                           maxLength: 2,
                           decoration: const InputDecoration(
@@ -1956,6 +2463,13 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _zipController,
+                    onChanged: (_) {
+                      if (_submitError != null) {
+                        setState(() {
+                          _submitError = null;
+                        });
+                      }
+                    },
                     textInputAction: TextInputAction.done,
                     decoration: const InputDecoration(
                       labelText: 'ZIP',
