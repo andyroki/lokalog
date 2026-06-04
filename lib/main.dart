@@ -71,6 +71,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   static const MethodChannel _locationChannel =
       MethodChannel('lokalog/location');
   static const int _trackingIntervalSeconds = 5;
+  static const int _maxSavedLocations = 5;
   static const int _requiredStableSamples = 3;
   static const double _maxAccuracyMeters = 50;
   static const double _maxSpeedForDwell = 1.2;
@@ -914,6 +915,20 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onAddNewLocation() async {
+    if (_sites.length >= _maxSavedLocations) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Only $_maxSavedLocations locations are allowed. Delete one to add another.',
+          ),
+        ),
+      );
+      return;
+    }
+
     _AddLocationInput? prefill;
     String? sheetError;
 
@@ -974,6 +989,20 @@ class _ScenarioPageState extends State<ScenarioPage> {
         lng: point.lng,
         requiredDwellMinutes: result.requiredMinutes,
       );
+
+      if (_sites.length >= _maxSavedLocations) {
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Only $_maxSavedLocations locations are allowed. Delete one to add another.',
+            ),
+          ),
+        );
+        return;
+      }
 
       setState(() {
         _sites.add(newSite);
@@ -1571,9 +1600,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
       ),
       floatingActionButton: _selectedTabIndex == 1
           ? FloatingActionButton.extended(
-              onPressed: _onAddNewLocation,
+              onPressed: _sites.length >= _maxSavedLocations
+                  ? null
+                  : _onAddNewLocation,
               icon: const Icon(Icons.add_location_alt),
-              label: const Text('Add New'),
+              label: Text(
+                _sites.length >= _maxSavedLocations
+                    ? 'Max 5 Reached'
+                    : 'Add New',
+              ),
             )
           : null,
       bottomNavigationBar: NavigationBar(
@@ -1805,11 +1840,31 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
     super.dispose();
   }
 
+  String _capitalizeWord(String value) {
+    if (value.isEmpty) {
+      return value;
+    }
+    final String lower = value.toLowerCase();
+    return '${lower[0].toUpperCase()}${lower.substring(1)}';
+  }
+
+  String _toTitleCase(String input) {
+    return input
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((String segment) => segment.isNotEmpty)
+        .map((String token) {
+      return token.split('-').map((String part) {
+        return part.split("'").map(_capitalizeWord).join("'");
+      }).join('-');
+    }).join(' ');
+  }
+
   void _submit() {
     final _AddLocationInput input = _AddLocationInput(
-      name: _nameController.text.trim(),
-      street: _streetController.text.trim(),
-      city: _cityController.text.trim(),
+      name: _toTitleCase(_nameController.text),
+      street: _toTitleCase(_streetController.text),
+      city: _toTitleCase(_cityController.text),
       state: _stateController.text.trim().toUpperCase(),
       zip: _zipController.text.trim(),
       requiredMinutes: _selectedMinutes,
