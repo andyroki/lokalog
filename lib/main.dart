@@ -914,76 +914,75 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onAddNewLocation() async {
-    final _AddLocationInput? result =
-        await showModalBottomSheet<_AddLocationInput>(
-      context: context,
-      isScrollControlled: true,
-      builder: (BuildContext sheetContext) {
-        return _AddLocationSheet(
-          title: 'Add New Location',
-          submitLabel: 'Add',
-          logMinuteOptions: _logMinuteOptions,
-        );
-      },
-    );
+    _AddLocationInput? prefill;
+    String? sheetError;
 
-    if (result == null) {
-      return;
-    }
-
-    if (!mounted) {
-      return;
-    }
-
-    if (result.name.isEmpty ||
-        result.street.isEmpty ||
-        result.city.isEmpty ||
-        result.state.isEmpty ||
-        result.zip.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Please fill name, street, city, state, and ZIP.')),
+    while (true) {
+      final _AddLocationInput? result =
+          await showModalBottomSheet<_AddLocationInput>(
+        context: context,
+        isScrollControlled: true,
+        builder: (BuildContext sheetContext) {
+          return _AddLocationSheet(
+            title: 'Add New Location',
+            submitLabel: 'Add',
+            logMinuteOptions: _logMinuteOptions,
+            initialInput: prefill,
+            errorMessage: sheetError,
+          );
+        },
       );
-      return;
-    }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Looking up latitude/longitude...')),
-    );
+      if (result == null || !mounted) {
+        return;
+      }
 
-    final _GeocodePoint? point = await _lookupCoordinates(result);
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      if (result.name.isEmpty ||
+          result.street.isEmpty ||
+          result.city.isEmpty ||
+          result.state.isEmpty ||
+          result.zip.isEmpty) {
+        prefill = result;
+        sheetError = 'Please fill name, street, city, state, and ZIP.';
+        continue;
+      }
 
-    if (point == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('Could not geocode address. Please verify and try again.'),
-        ),
+        const SnackBar(content: Text('Looking up latitude/longitude...')),
       );
+
+      final _GeocodePoint? point = await _lookupCoordinates(result);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      if (point == null) {
+        prefill = result;
+        sheetError =
+            'Could not find that address. Please correct it and try again.';
+        continue;
+      }
+
+      final JobSite newSite = JobSite(
+        name: result.name,
+        street: result.street,
+        city: result.city,
+        state: result.state,
+        zip: result.zip,
+        lat: point.lat,
+        lng: point.lng,
+        requiredDwellMinutes: result.requiredMinutes,
+      );
+
+      setState(() {
+        _sites.add(newSite);
+        _status =
+            'Added location: ${newSite.name} at ${newSite.address} (${result.requiredMinutes}m).';
+      });
+      unawaited(_saveSites());
       return;
     }
-
-    final JobSite newSite = JobSite(
-      name: result.name,
-      street: result.street,
-      city: result.city,
-      state: result.state,
-      zip: result.zip,
-      lat: point.lat,
-      lng: point.lng,
-      requiredDwellMinutes: result.requiredMinutes,
-    );
-
-    setState(() {
-      _sites.add(newSite);
-      _status =
-          'Added location: ${newSite.name} at ${newSite.address} (${result.requiredMinutes}m).';
-    });
-    unawaited(_saveSites());
   }
 
   Future<void> _onEditLocation(int index, JobSite site) async {
@@ -1754,12 +1753,14 @@ class _AddLocationSheet extends StatefulWidget {
     required this.submitLabel,
     required this.logMinuteOptions,
     this.initialInput,
+    this.errorMessage,
   });
 
   final String title;
   final String submitLabel;
   final List<int> logMinuteOptions;
   final _AddLocationInput? initialInput;
+  final String? errorMessage;
 
   @override
   State<_AddLocationSheet> createState() => _AddLocationSheetState();
@@ -1837,6 +1838,16 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                     style: const TextStyle(
                         fontSize: 18, fontWeight: FontWeight.bold),
                   ),
+                  if (widget.errorMessage != null) ...<Widget>[
+                    const SizedBox(height: 10),
+                    Text(
+                      widget.errorMessage!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _nameController,
