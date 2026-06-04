@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
-import 'package:geolocator/geolocator.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 void main() {
@@ -35,15 +36,18 @@ class ScenarioPage extends StatefulWidget {
 }
 
 class _ScenarioPageState extends State<ScenarioPage> {
-  static const int _trackingIntervalSeconds = 15;
+  static const MethodChannel _locationChannel = MethodChannel('lokalog/location');
+  static const int _trackingIntervalSeconds = 5;
   static const int _requiredStableSamples = 3;
-  static const double _maxAccuracyMeters = 30;
+  static const double _maxAccuracyMeters = 50;
   static const double _maxSpeedForDwell = 1.2;
-  static const double _matchRadiusMeters = 80;
-  static const List<int> _logMinuteOptions = <int>[10, 15, 20, 30, 45, 60];
+  static const double _matchRadiusMeters = 100;
+  static const List<int> _logMinuteOptions = <int>[1, 5, 10, 15, 20, 30, 45, 60];
+  static const String _sitesStorageKey = 'saved_job_sites_v1';
 
   final List<JobSite> _sites = <JobSite>[];
   final List<JobLog> _logs = <JobLog>[];
+  final Set<String> _sessionLoggedAddresses = <String>{};
   final Map<String, double> _dwellMinutes = <String, double>{};
 
   Timer? _trackingTimer;
@@ -54,6 +58,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   int _stableSamples = 0;
   bool _isTracking = false;
   int _selectedTabIndex = 0;
+  DateTime? _lastFixAt;
+  SiteDistance? _latestNearest;
 
   JobSite? _candidateSite;
   JobSite? _pendingSite;
@@ -62,7 +68,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
   @override
   void initState() {
     super.initState();
-    _sites.addAll(<JobSite>[
+    unawaited(_loadSites());
+  }
+
+  List<JobSite> _defaultSites() {
+    return <JobSite>[
       JobSite(
         name: 'Green Valley HOA',
         street: '921 Green Lawn Dr',
@@ -93,7 +103,126 @@ class _ScenarioPageState extends State<ScenarioPage> {
         lng: -96.79462,
         requiredDwellMinutes: 30,
       ),
-    ]);
+    ];
+  }
+
+  Future<void> _loadSites() async {
+    try {
+      final String? raw = await _locationChannel.invokeMethod<String>('loadSites');
+
+      if (raw == null || raw.trim().isEmpty) {
+        final List<JobSite> defaults = _defaultSites();
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _sites
+            ..clear()
+            ..addAll(defaults);
+        });
+        await _loadBackgroundLogs();
+        await _saveSites();
+        return;
+      }
+
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is! List<dynamic>) {
+        return;
+      }
+
+      final List<JobSite> loaded = decoded
+          .whereType<Map<String, dynamic>>()
+          .map(JobSite.fromJson)
+          .toList();
+
+      if (!mounted) {
+        return;
+      }
+      if (loaded.isEmpty) {
+        setState(() {
+          _sites
+            ..clear()
+            ..addAll(_defaultSites());
+        });
+      } else {
+        setState(() {
+          _sites
+            ..clear()
+            ..addAll(loaded);
+        });
+      }
+      await _loadBackgroundLogs();
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _sites
+          ..clear()
+          ..addAll(_defaultSites());
+      });
+      await _loadBackgroundLogs();
+    }
+  }
+
+  Future<void> _loadBackgroundLogs() async {
+    try {
+      final String? raw = await _locationChannel.invokeMethod<String>('loadBackgroundLogs');
+      if (raw == null || raw.trim().isEmpty) {
+        return;
+      }
+
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is! List<dynamic>) {
+        return;
+      }
+
+      final List<JobLog> loadedLogs = decoded
+          .whereType<Map<String, dynamic>>()
+          .map((Map<String, dynamic> item) {
+            return JobLog(
+              address: (item['address'] ?? '').toString(),
+              lat: ((item['lat'] as num?)?.toDouble() ?? 0),
+              lng: ((item['lng'] as num?)?.toDouble() ?? 0),
+              confidence: ((item['confidence'] as num?)?.toDouble() ?? 100),
+              confirmedByUser: (item['confirmedByUser'] as bool?) ?? false,
+              autoLogged: (item['autoLogged'] as bool?) ?? true,
+              timestamp: DateTime.fromMillisecondsSinceEpoch(
+                ((item['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch),
+              ),
+            );
+          })
+          .toList();
+
+      if (!mounted || loadedLogs.isEmpty) {
+        return;
+      }
+
+      final Set<String> existing = _logs
+          .map((JobLog log) => '${log.address}|${log.timestamp.millisecondsSinceEpoch}')
+          .toSet();
+
+      setState(() {
+        for (final JobLog log in loadedLogs) {
+          final String key = '${log.address}|${log.timestamp.millisecondsSinceEpoch}';
+          if (existing.add(key)) {
+            _logs.insert(0, log);
+          }
+        }
+      });
+    } catch (_) {
+      // Ignore background log load errors; they are not fatal.
+    }
+  }
+
+  Future<void> _saveSites() async {
+    final String encoded = jsonEncode(
+      _sites.map((JobSite site) => site.toJson()).toList(),
+    );
+    await _locationChannel.invokeMethod<void>('saveSites', <String, dynamic>{
+      'key': _sitesStorageKey,
+      'value': encoded,
+    });
   }
 
   @override
@@ -116,15 +245,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return;
     }
 
-    _logs.clear();
+    _sessionLoggedAddresses.clear();
     _dwellMinutes.clear();
     _stableSamples = 0;
     _candidateSite = null;
     _pendingSite = null;
+    _latestNearest = null;
     _promptCountdown = 0;
+    _lastFixAt = null;
     _promptTimer?.cancel();
     _isTracking = true;
-    _status = 'Tracking started. Reading live GPS every $_trackingIntervalSeconds seconds.';
+    _status = 'Tracking started. Reading live GPS signal...';
 
     _trackingTimer?.cancel();
     _trackingTimer = Timer.periodic(
@@ -133,12 +264,28 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _pollCurrentLocation();
       },
     );
+
     unawaited(_pollCurrentLocation());
     setState(() {});
   }
 
   Future<bool> _ensureLocationAccess() async {
-    final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!Platform.isAndroid) {
+      setState(() {
+        _status = 'Native GPS is implemented for Android in this build.';
+      });
+      return false;
+    }
+
+    bool serviceEnabled = false;
+    try {
+      serviceEnabled =
+          (await _locationChannel.invokeMethod<bool>('isLocationServiceEnabled')) ??
+          false;
+    } on PlatformException {
+      serviceEnabled = false;
+    }
+
     if (!serviceEnabled) {
       setState(() {
         _status = 'Location services are off. Turn on GPS and try again.';
@@ -146,22 +293,22 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return false;
     }
 
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    if (permission == LocationPermission.denied) {
+    final bool granted =
+        (await _locationChannel.invokeMethod<bool>('checkAndRequestPermission')) ??
+        false;
+    if (!granted) {
       setState(() {
         _status = 'Location permission denied. Allow location access to start tracking.';
       });
       return false;
     }
 
-    if (permission == LocationPermission.deniedForever) {
+    final bool backgroundGranted =
+        (await _locationChannel.invokeMethod<bool>('hasBackgroundLocationPermission')) ??
+        false;
+    if (!backgroundGranted) {
       setState(() {
-        _status =
-            'Location permission is permanently denied. Enable it from app settings.';
+        _status = 'For app-closed geofencing, set Location permission to "Allow all the time" in Android settings.';
       });
       return false;
     }
@@ -175,22 +322,29 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
 
     try {
-      const LocationSettings locationSettings = LocationSettings(
-        accuracy: LocationAccuracy.high,
-      );
-      final Position position = await Geolocator.getCurrentPosition(
-        locationSettings: locationSettings,
+      final Map<Object?, Object?>? position =
+          await _locationChannel.invokeMethod<Map<Object?, Object?>>(
+        'getCurrentLocation',
       ).timeout(const Duration(seconds: 12));
 
       if (!_isTracking || !mounted) {
         return;
       }
 
+      final double? lat = (position?['latitude'] as num?)?.toDouble();
+      final double? lng = (position?['longitude'] as num?)?.toDouble();
+      if (lat == null || lng == null) {
+        return;
+      }
+
       final LocationFix fix = LocationFix(
-        lat: position.latitude,
-        lng: position.longitude,
-        accuracyMeters: position.accuracy,
-        speedMetersPerSecond: max(0, position.speed),
+        lat: lat,
+        lng: lng,
+        accuracyMeters: ((position?['accuracy'] as num?)?.toDouble() ?? 999),
+        speedMetersPerSecond: max(
+          0,
+          ((position?['speed'] as num?)?.toDouble() ?? 0),
+        ),
       );
       _processFix(fix);
     } catch (_) {
@@ -205,6 +359,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   void _stopScenario() {
     _trackingTimer?.cancel();
+    _trackingTimer = null;
     _promptTimer?.cancel();
     setState(() {
       _isTracking = false;
@@ -215,6 +370,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   void _processFix(LocationFix fix) {
+    final DateTime now = DateTime.now();
+    final double elapsedMinutes;
+    if (_lastFixAt == null) {
+      elapsedMinutes = 0;
+    } else {
+      elapsedMinutes = now.difference(_lastFixAt!).inMilliseconds / 60000;
+    }
+    _lastFixAt = now;
+
     _currentFix = fix;
     if (_sites.isEmpty) {
       return;
@@ -223,14 +387,18 @@ class _ScenarioPageState extends State<ScenarioPage> {
     final SiteDistance nearest = _findNearestSite(fix, _sites);
     final bool goodAccuracy = fix.accuracyMeters <= _maxAccuracyMeters;
     final bool lowSpeed = fix.speedMetersPerSecond <= _maxSpeedForDwell;
-    final bool inGeofence = nearest.distanceMeters <= _matchRadiusMeters;
+    final double effectiveRadius = max(
+      _matchRadiusMeters,
+      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+    );
+    final bool inGeofence = nearest.distanceMeters <= effectiveRadius;
 
-    if (goodAccuracy && lowSpeed && inGeofence) {
+    if (inGeofence) {
       _stableSamples += 1;
       _candidateSite = nearest.site;
+      final double increment = elapsedMinutes.clamp(0, 3);
       _dwellMinutes[nearest.site.address] =
-          (_dwellMinutes[nearest.site.address] ?? 0) +
-          (_trackingIntervalSeconds / 60);
+          (_dwellMinutes[nearest.site.address] ?? 0) + increment;
     } else {
       _stableSamples = 0;
       _candidateSite = null;
@@ -238,9 +406,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     if (_candidateSite != null && _pendingSite == null) {
       final double dwell = _dwellMinutes[_candidateSite!.address] ?? 0;
-      final bool alreadyLogged = _logs.any(
-        (JobLog log) => log.address == _candidateSite!.address,
-      );
+      final bool alreadyLogged = _sessionLoggedAddresses.contains(_candidateSite!.address);
 
       if (!alreadyLogged &&
           dwell >= _candidateSite!.requiredDwellMinutes.toDouble() &&
@@ -250,13 +416,20 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
 
     setState(() {
+      _latestNearest = nearest;
       _status = _buildStatusText(
         nearest: nearest,
         goodAccuracy: goodAccuracy,
         lowSpeed: lowSpeed,
         inGeofence: inGeofence,
+        effectiveRadius: effectiveRadius,
       );
     });
+  }
+
+  double _minutesRemainingToLog(JobSite site) {
+    final double dwell = _dwellMinutes[site.address] ?? 0;
+    return max(0, site.requiredDwellMinutes.toDouble() - dwell);
   }
 
   void _showConfirmationPrompt(JobSite site) {
@@ -303,6 +476,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     );
 
     setState(() {
+      _sessionLoggedAddresses.add(site.address);
       _pendingSite = null;
       _promptCountdown = 0;
       _status = autoLogged
@@ -325,15 +499,22 @@ class _ScenarioPageState extends State<ScenarioPage> {
     required bool goodAccuracy,
     required bool lowSpeed,
     required bool inGeofence,
+    required double effectiveRadius,
   }) {
     final double dwell = _dwellMinutes[nearest.site.address] ?? 0;
+    final double remaining = _minutesRemainingToLog(nearest.site);
+    final String accuracyLabel = goodAccuracy
+        ? 'good'
+        : 'poor (nearest estimate may drift)';
     return 'Nearest: ${nearest.site.address} | '
         'distance: ${nearest.distanceMeters.toStringAsFixed(1)}m | '
         'target: ${nearest.site.requiredDwellMinutes}m | '
         'dwell: ${dwell.toStringAsFixed(1)}m | '
-        'accuracy: ${goodAccuracy ? 'good' : 'poor'} | '
+        'remaining: ${remaining.toStringAsFixed(1)}m | '
+        'accuracy: $accuracyLabel | '
         'motion: ${lowSpeed ? 'stationary' : 'moving'} | '
-        'geofence: ${inGeofence ? 'inside' : 'outside'}';
+          'geofence: ${inGeofence ? 'inside' : 'outside'} '
+          '(${nearest.distanceMeters.toStringAsFixed(0)}/${effectiveRadius.toStringAsFixed(0)}m)';
   }
 
   Future<_GeocodePoint?> _lookupCoordinates(_AddLocationInput input) async {
@@ -421,154 +602,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
       context: context,
       isScrollControlled: true,
       builder: (BuildContext sheetContext) {
-        int selectedMinutes = 20;
-        String nameInput = '';
-        String streetInput = '';
-        String cityInput = '';
-        String stateInput = '';
-        String zipInput = '';
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setSheetState) {
-            final double keyboardInset = MediaQuery.of(context).viewInsets.bottom;
-            return SafeArea(
-              child: AnimatedPadding(
-                duration: const Duration(milliseconds: 200),
-                padding: EdgeInsets.only(bottom: keyboardInset),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        const Text(
-                          'Add New Location',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 12),
-                        TextFormField(
-                          textInputAction: TextInputAction.next,
-                          decoration: const InputDecoration(
-                            labelText: 'Client Name',
-                            hintText: 'Smith Residence',
-                            border: OutlineInputBorder(),
-                          ),
-                          onChanged: (String value) {
-                            nameInput = value;
-                          },
-                        ),
-                        const SizedBox(height: 12),
-                        TextFormField(
-                          textInputAction: TextInputAction.next,
-                          maxLines: 2,
-                          decoration: const InputDecoration(
-                            labelText: 'Street',
-                            hintText: '123 Main St',
-                            border: OutlineInputBorder(),
-                          ),
-                          onChanged: (String value) {
-                            streetInput = value;
-                          },
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: <Widget>[
-                            Expanded(
-                              flex: 2,
-                              child: TextFormField(
-                                textInputAction: TextInputAction.next,
-                                decoration: const InputDecoration(
-                                  labelText: 'City',
-                                  border: OutlineInputBorder(),
-                                ),
-                                onChanged: (String value) {
-                                  cityInput = value;
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: TextFormField(
-                                textInputAction: TextInputAction.next,
-                                maxLength: 2,
-                                decoration: const InputDecoration(
-                                  labelText: 'State',
-                                  counterText: '',
-                                  border: OutlineInputBorder(),
-                                ),
-                                onChanged: (String value) {
-                                  stateInput = value;
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        TextFormField(
-                          textInputAction: TextInputAction.done,
-                          decoration: const InputDecoration(
-                            labelText: 'ZIP',
-                            hintText: '75201',
-                            border: OutlineInputBorder(),
-                          ),
-                          onChanged: (String value) {
-                            zipInput = value;
-                          },
-                        ),
-                        const SizedBox(height: 12),
-                        DropdownButtonFormField<int>(
-                          initialValue: selectedMinutes,
-                          decoration: const InputDecoration(
-                            labelText: 'How long to log (minutes)',
-                            border: OutlineInputBorder(),
-                          ),
-                          items: _logMinuteOptions.map((int minutes) {
-                            return DropdownMenuItem<int>(
-                              value: minutes,
-                              child: Text('$minutes minutes'),
-                            );
-                          }).toList(),
-                          onChanged: (int? value) {
-                            if (value == null) {
-                              return;
-                            }
-                            setSheetState(() {
-                              selectedMinutes = value;
-                            });
-                          },
-                        ),
-                        const SizedBox(height: 14),
-                        Row(
-                          children: <Widget>[
-                            TextButton(
-                              onPressed: () => Navigator.of(sheetContext).pop(),
-                              child: const Text('Cancel'),
-                            ),
-                            const Spacer(),
-                            FilledButton(
-                              onPressed: () {
-                                Navigator.of(sheetContext).pop(
-                                  _AddLocationInput(
-                                    name: nameInput.trim(),
-                                    street: streetInput.trim(),
-                                    city: cityInput.trim(),
-                                    state: stateInput.trim().toUpperCase(),
-                                    zip: zipInput.trim(),
-                                    requiredMinutes: selectedMinutes,
-                                  ),
-                                );
-                              },
-                              child: const Text('Add'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
+        return _AddLocationSheet(
+          title: 'Add New Location',
+          submitLabel: 'Add',
+          logMinuteOptions: _logMinuteOptions,
         );
       },
     );
@@ -627,6 +664,112 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _status =
           'Added location: ${newSite.name} at ${newSite.address} (${result.requiredMinutes}m).';
     });
+    unawaited(_saveSites());
+  }
+
+  Future<void> _onEditLocation(int index, JobSite site) async {
+    final _AddLocationInput? result = await showModalBottomSheet<_AddLocationInput>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext sheetContext) {
+        return _AddLocationSheet(
+          title: 'Edit Location',
+          submitLabel: 'Save',
+          logMinuteOptions: _logMinuteOptions,
+          initialInput: _AddLocationInput(
+            name: site.name,
+            street: site.street,
+            city: site.city,
+            state: site.state,
+            zip: site.zip,
+            requiredMinutes: site.requiredDwellMinutes,
+          ),
+        );
+      },
+    );
+
+    if (result == null || !mounted) {
+      return;
+    }
+
+    if (result.name.isEmpty ||
+        result.street.isEmpty ||
+        result.city.isEmpty ||
+        result.state.isEmpty ||
+        result.zip.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill name, street, city, state, and ZIP.')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Looking up updated latitude/longitude...')),
+    );
+
+    final _GeocodePoint? point = await _lookupCoordinates(result);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    if (point == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not geocode address. Please verify and try again.'),
+        ),
+      );
+      return;
+    }
+
+    final JobSite updatedSite = JobSite(
+      name: result.name,
+      street: result.street,
+      city: result.city,
+      state: result.state,
+      zip: result.zip,
+      lat: point.lat,
+      lng: point.lng,
+      requiredDwellMinutes: result.requiredMinutes,
+    );
+
+    setState(() {
+      _sites[index] = updatedSite;
+      _status = 'Updated location: ${updatedSite.name} at ${updatedSite.address} (${result.requiredMinutes}m).';
+    });
+    unawaited(_saveSites());
+  }
+
+  Future<void> _onDeleteLocation(int index, JobSite site) async {
+    final bool? confirmDelete = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Location'),
+          content: Text('Delete ${site.name}? This cannot be undone.'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmDelete != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _sites.removeAt(index);
+      _status = 'Deleted location: ${site.name}.';
+    });
+    unawaited(_saveSites());
   }
 
   Widget _buildLogScreen() {
@@ -665,6 +808,18 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 '${_currentFix!.lng.toStringAsFixed(5)}\n'
                 'Accuracy: ${_currentFix!.accuracyMeters.toStringAsFixed(1)}m | '
                 'Speed: ${_currentFix!.speedMetersPerSecond.toStringAsFixed(1)} m/s',
+              ),
+            ),
+          ),
+        if (_latestNearest != null)
+          Card(
+            color: Colors.blue.shade50,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Countdown to log ${_latestNearest!.site.name}: '
+                '${_minutesRemainingToLog(_latestNearest!.site).toStringAsFixed(1)} minutes remaining',
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
           ),
@@ -764,6 +919,25 @@ class _ScenarioPageState extends State<ScenarioPage> {
                   'Log after: ${site.requiredDwellMinutes} minutes',
                 ),
                 isThreeLine: true,
+                trailing: PopupMenuButton<String>(
+                  onSelected: (String action) {
+                    if (action == 'edit') {
+                      _onEditLocation(entry.key, site);
+                    } else if (action == 'delete') {
+                      _onDeleteLocation(entry.key, site);
+                    }
+                  },
+                  itemBuilder: (BuildContext context) => const <PopupMenuEntry<String>>[
+                    PopupMenuItem<String>(
+                      value: 'edit',
+                      child: Text('Edit'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'delete',
+                      child: Text('Delete'),
+                    ),
+                  ],
+                ),
               ),
             );
           }),
@@ -835,6 +1009,32 @@ class JobSite {
   final int requiredDwellMinutes;
 
   String get address => '$street, $city, $state $zip';
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'name': name,
+      'street': street,
+      'city': city,
+      'state': state,
+      'zip': zip,
+      'lat': lat,
+      'lng': lng,
+      'requiredDwellMinutes': requiredDwellMinutes,
+    };
+  }
+
+  factory JobSite.fromJson(Map<String, dynamic> json) {
+    return JobSite(
+      name: (json['name'] ?? '').toString(),
+      street: (json['street'] ?? '').toString(),
+      city: (json['city'] ?? '').toString(),
+      state: (json['state'] ?? '').toString(),
+      zip: (json['zip'] ?? '').toString(),
+      lat: (json['lat'] as num).toDouble(),
+      lng: (json['lng'] as num).toDouble(),
+      requiredDwellMinutes: (json['requiredDwellMinutes'] as num).toInt(),
+    );
+  }
 }
 
 class LocationFix {
@@ -901,4 +1101,199 @@ class _GeocodePoint {
 
   final double lat;
   final double lng;
+}
+
+class _AddLocationSheet extends StatefulWidget {
+  const _AddLocationSheet({
+    required this.title,
+    required this.submitLabel,
+    required this.logMinuteOptions,
+    this.initialInput,
+  });
+
+  final String title;
+  final String submitLabel;
+  final List<int> logMinuteOptions;
+  final _AddLocationInput? initialInput;
+
+  @override
+  State<_AddLocationSheet> createState() => _AddLocationSheetState();
+}
+
+class _AddLocationSheetState extends State<_AddLocationSheet> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _streetController = TextEditingController();
+  final TextEditingController _cityController = TextEditingController();
+  final TextEditingController _stateController = TextEditingController();
+  final TextEditingController _zipController = TextEditingController();
+
+  int _selectedMinutes = 20;
+
+  @override
+  void initState() {
+    super.initState();
+    final _AddLocationInput? initial = widget.initialInput;
+    if (initial != null) {
+      _nameController.text = initial.name;
+      _streetController.text = initial.street;
+      _cityController.text = initial.city;
+      _stateController.text = initial.state;
+      _zipController.text = initial.zip;
+      _selectedMinutes = initial.requiredMinutes;
+    }
+
+    if (!widget.logMinuteOptions.contains(_selectedMinutes) &&
+        widget.logMinuteOptions.isNotEmpty) {
+      _selectedMinutes = widget.logMinuteOptions.first;
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _streetController.dispose();
+    _cityController.dispose();
+    _stateController.dispose();
+    _zipController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final _AddLocationInput input = _AddLocationInput(
+      name: _nameController.text.trim(),
+      street: _streetController.text.trim(),
+      city: _cityController.text.trim(),
+      state: _stateController.text.trim().toUpperCase(),
+      zip: _zipController.text.trim(),
+      requiredMinutes: _selectedMinutes,
+    );
+    Navigator.of(context).pop(input);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double keyboardInset = MediaQuery.of(context).viewInsets.bottom;
+    return SafeArea(
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 200),
+        padding: EdgeInsets.only(bottom: keyboardInset),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+          child: SingleChildScrollView(
+            child: Form(
+              key: _formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    widget.title,
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _nameController,
+                    textInputAction: TextInputAction.next,
+                    decoration: const InputDecoration(
+                      labelText: 'Client Name',
+                      hintText: 'Smith Residence',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _streetController,
+                    textInputAction: TextInputAction.next,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Street',
+                      hintText: '123 Main St',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        flex: 2,
+                        child: TextFormField(
+                          controller: _cityController,
+                          textInputAction: TextInputAction.next,
+                          decoration: const InputDecoration(
+                            labelText: 'City',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _stateController,
+                          textInputAction: TextInputAction.next,
+                          maxLength: 2,
+                          decoration: const InputDecoration(
+                            labelText: 'State',
+                            counterText: '',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _zipController,
+                    textInputAction: TextInputAction.done,
+                    decoration: const InputDecoration(
+                      labelText: 'ZIP',
+                      hintText: '75201',
+                      border: OutlineInputBorder(),
+                    ),
+                    onFieldSubmitted: (_) => _submit(),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int>(
+                    initialValue: _selectedMinutes,
+                    decoration: const InputDecoration(
+                      labelText: 'How long to log (minutes)',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: widget.logMinuteOptions.map((int minutes) {
+                      return DropdownMenuItem<int>(
+                        value: minutes,
+                        child: Text('$minutes minutes'),
+                      );
+                    }).toList(),
+                    onChanged: (int? value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setState(() {
+                        _selectedMinutes = value;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      const Spacer(),
+                      FilledButton(
+                        onPressed: _submit,
+                        child: Text(widget.submitLabel),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
