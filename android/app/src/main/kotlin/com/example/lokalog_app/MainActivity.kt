@@ -1,14 +1,17 @@
 package com.example.lokalog_app
 
 import android.Manifest
-import android.content.Context
+import android.app.AppOpsManager
+import android.app.usage.UsageStats
+import android.app.usage.UsageStatsManager
 import android.content.Intent
 import android.os.Build
-import android.os.BatteryManager
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.BatteryManager
 import android.provider.Settings
 import android.location.LocationManager
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
@@ -18,6 +21,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import kotlin.math.roundToInt
 
 class MainActivity : FlutterActivity() {
 	private val channelName = "lokalog/location"
@@ -31,14 +35,6 @@ class MainActivity : FlutterActivity() {
 		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
 			.setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
 				when (call.method) {
-					"getBatteryLevel" -> {
-						result.success(getBatteryLevel())
-					}
-
-					"getBatteryState" -> {
-						result.success(getBatteryState())
-					}
-
 					"isLocationServiceEnabled" -> {
 						result.success(isLocationServiceEnabled())
 					}
@@ -71,17 +67,7 @@ class MainActivity : FlutterActivity() {
 						result.success(null)
 					}
 
-"loadPreference" -> {
-					val key = call.argument<String>("key")
-					if (key == null) {
-						result.error("INVALID_ARGUMENT", "Missing key", null)
-						return@setMethodCallHandler
-					}
-					val prefs = getSharedPreferences("lokalog_store", MODE_PRIVATE)
-					result.success(prefs.getString(key, null))
-				}
-
-				"loadBackgroundLogs" -> {
+					"loadBackgroundLogs" -> {
 						result.success(GeofenceBackground.loadBackgroundLogsJson(this))
 					}
 
@@ -97,26 +83,21 @@ class MainActivity : FlutterActivity() {
 						openAppSettings(result)
 					}
 
+					"hasUsageAccessPermission" -> {
+						result.success(hasUsageStatsPermission())
+					}
+
+					"openUsageAccessSettings" -> {
+						openUsageAccessSettings(result)
+					}
+
+					"getAppBatteryUsage" -> {
+						getAppBatteryUsage(result)
+					}
+
 					else -> result.notImplemented()
 				}
 			}
-	}
-
-	private fun getBatteryLevel(): Int {
-		val manager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-		return manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-	}
-
-	private fun getBatteryState(): String {
-		val intent = registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-		val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-		return when (status) {
-			BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
-			BatteryManager.BATTERY_STATUS_DISCHARGING -> "discharging"
-			BatteryManager.BATTERY_STATUS_FULL -> "full"
-			BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "not_charging"
-			else -> "unknown"
-		}
 	}
 
 	private fun openLocationSettings(result: MethodChannel.Result) {
@@ -137,6 +118,42 @@ class MainActivity : FlutterActivity() {
 			intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 			startActivity(intent)
 			result.success(true)
+		} catch (error: Exception) {
+			result.error("OPEN_SETTINGS_FAILED", error.message, null)
+		}
+	}
+
+	private fun openUsageAccessSettings(result: MethodChannel.Result) {
+		try {
+			val usageIntent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+				addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+			}
+			if (usageIntent.resolveActivity(packageManager) != null) {
+				startActivity(usageIntent)
+				result.success(true)
+				return
+			}
+
+			val manageAppsIntent = Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS).apply {
+				addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+			}
+			if (manageAppsIntent.resolveActivity(packageManager) != null) {
+				startActivity(manageAppsIntent)
+				result.success(true)
+				return
+			}
+
+			val appDetailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+				data = Uri.parse("package:$packageName")
+				addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+			}
+			if (appDetailsIntent.resolveActivity(packageManager) != null) {
+				startActivity(appDetailsIntent)
+				result.success(true)
+				return
+			}
+
+			result.error("OPEN_SETTINGS_FAILED", "No compatible settings activity found", null)
 		} catch (error: Exception) {
 			result.error("OPEN_SETTINGS_FAILED", error.message, null)
 		}
@@ -168,6 +185,25 @@ class MainActivity : FlutterActivity() {
 			this,
 			Manifest.permission.ACCESS_BACKGROUND_LOCATION
 		) == PackageManager.PERMISSION_GRANTED
+	}
+
+	private fun hasUsageStatsPermission(): Boolean {
+		val appOps = getSystemService(APP_OPS_SERVICE) as AppOpsManager
+		val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+			appOps.unsafeCheckOpNoThrow(
+				AppOpsManager.OPSTR_GET_USAGE_STATS,
+				android.os.Process.myUid(),
+				packageName
+			)
+		} else {
+			@Suppress("DEPRECATION")
+			appOps.checkOpNoThrow(
+				AppOpsManager.OPSTR_GET_USAGE_STATS,
+				android.os.Process.myUid(),
+				packageName
+			)
+		}
+		return mode == AppOpsManager.MODE_ALLOWED
 	}
 
 	private fun checkAndRequestPermission(result: MethodChannel.Result) {
@@ -246,6 +282,107 @@ class MainActivity : FlutterActivity() {
 			.addOnFailureListener { error ->
 				result.error("LOCATION_ERROR", error.message, null)
 			}
+	}
+
+	private fun getAppBatteryUsage(result: MethodChannel.Result) {
+		if (!hasUsageStatsPermission()) {
+			result.error(
+				"USAGE_ACCESS_DENIED",
+				"Usage Access is required to read app activity stats.",
+				null
+			)
+			return
+		}
+
+		try {
+			val usageStatsManager =
+				getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
+			val end = System.currentTimeMillis()
+			val start = end - 24L * 60L * 60L * 1000L
+			val stats = usageStatsManager.queryUsageStats(
+				UsageStatsManager.INTERVAL_DAILY,
+				start,
+				end
+			)
+
+			if (stats.isNullOrEmpty()) {
+				result.success(
+					mapOf(
+						"generatedAtEpochMs" to end,
+						"windowHours" to 24,
+						"deviceBatteryLevel" to readBatteryLevel(),
+						"apps" to emptyList<Map<String, Any>>()
+					)
+				)
+				return
+			}
+
+			val filtered = mutableListOf<UsageStats>()
+			for (item in stats) {
+				val foregroundMs = item.totalTimeInForeground
+				if (foregroundMs <= 0L) {
+					continue
+				}
+				try {
+					val info = packageManager.getApplicationInfo(item.packageName, 0)
+					val isSystemApp = (info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+					if (!isSystemApp || item.packageName == packageName) {
+						filtered.add(item)
+					}
+				} catch (_: Exception) {
+					filtered.add(item)
+				}
+			}
+
+			val sorted = filtered.sortedByDescending { it.totalTimeInForeground }.take(25)
+			val totalForegroundMs = sorted.sumOf { it.totalTimeInForeground }.toDouble().coerceAtLeast(1.0)
+
+			val apps = sorted.map { item ->
+				val foregroundMinutes = item.totalTimeInForeground.toDouble() / 60000.0
+				val sharePercent = (item.totalTimeInForeground.toDouble() / totalForegroundMs) * 100.0
+				mapOf(
+					"packageName" to item.packageName,
+					"appName" to resolveAppName(item.packageName),
+					"foregroundMinutes" to roundToOneDecimal(foregroundMinutes),
+					"estimatedBatterySharePercent" to roundToOneDecimal(sharePercent)
+				)
+			}
+
+			result.success(
+				mapOf(
+					"generatedAtEpochMs" to end,
+					"windowHours" to 24,
+					"deviceBatteryLevel" to readBatteryLevel(),
+					"apps" to apps
+				)
+			)
+		} catch (error: Exception) {
+			Log.e("MainActivity", "Failed to load app battery usage", error)
+			result.error("BATTERY_USAGE_ERROR", error.message, null)
+		}
+	}
+
+	private fun resolveAppName(packageId: String): String {
+		return try {
+			val info = packageManager.getApplicationInfo(packageId, 0)
+			packageManager.getApplicationLabel(info).toString()
+		} catch (_: Exception) {
+			packageId
+		}
+	}
+
+	private fun readBatteryLevel(): Int? {
+		return try {
+			val batteryManager = getSystemService(BATTERY_SERVICE) as BatteryManager
+			val battery = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+			if (battery in 0..100) battery else null
+		} catch (_: Exception) {
+			null
+		}
+	}
+
+	private fun roundToOneDecimal(value: Double): Double {
+		return (value * 10.0).roundToInt() / 10.0
 	}
 
 	private fun sendLocationResult(

@@ -19,39 +19,12 @@ class LokaLogApp extends StatefulWidget {
 }
 
 class _LokaLogAppState extends State<LokaLogApp> {
-  static const MethodChannel _prefChannel = MethodChannel('lokalog/location');
   ThemeMode _themeMode = ThemeMode.light;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_loadDarkMode());
-  }
-
-  Future<void> _loadDarkMode() async {
-    try {
-      final String? value = await _prefChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': 'pref_dark_mode'},
-      );
-      if (value != null && mounted) {
-        setState(() {
-          _themeMode = value == 'true' ? ThemeMode.dark : ThemeMode.light;
-        });
-      }
-    } catch (_) {
-      // Use default if load fails.
-    }
-  }
 
   void _setDarkMode(bool enabled) {
     setState(() {
       _themeMode = enabled ? ThemeMode.dark : ThemeMode.light;
     });
-    unawaited(_prefChannel.invokeMethod<void>(
-      'saveSites',
-      <String, dynamic>{'key': 'pref_dark_mode', 'value': enabled.toString()},
-    ));
   }
 
   @override
@@ -97,14 +70,11 @@ class ScenarioPage extends StatefulWidget {
 class _ScenarioPageState extends State<ScenarioPage> {
   static const MethodChannel _locationChannel =
       MethodChannel('lokalog/location');
+  static const int _trackingIntervalSeconds = 5;
   static const int _requiredStableSamples = 3;
   static const double _maxAccuracyMeters = 50;
   static const double _maxSpeedForDwell = 1.2;
   static const double _matchRadiusMeters = 100;
-  static const double _outsideMinutesForRelog = 10;
-  static const List<int> _gpsPollSecondOptions = <int>[30, 60, 300];
-  static const List<int> _legacyGpsPollMinuteOptions = <int>[1, 5];
-  static const String _gpsPollPreferenceKey = 'pref_gps_poll_minutes';
   static const List<int> _logMinuteOptions = <int>[
     1,
     5,
@@ -121,8 +91,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
   final List<JobLog> _logs = <JobLog>[];
   final Set<String> _sessionLoggedAddresses = <String>{};
   final Map<String, double> _dwellMinutes = <String, double>{};
-  final Map<String, double> _outsideMinutes = <String, double>{};
-  final Map<String, bool> _relogEligible = <String, bool>{};
 
   Timer? _trackingTimer;
   Timer? _promptTimer;
@@ -131,12 +99,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   String _status = 'Open Settings to start tracking.';
   int _stableSamples = 0;
   bool _isTracking = false;
-  bool _debugMode = false;
-  int _gpsPollIntervalSeconds = 60;
   int _selectedTabIndex = 0;
-  int? _batteryLevel;
-  String? _batteryState;
-  bool _isLoadingBattery = false;
+  bool _debugModeEnabled = true;
   DateTime? _lastFixAt;
   SiteDistance? _latestNearest;
 
@@ -144,91 +108,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
   JobSite? _pendingSite;
   int _promptCountdown = 0;
 
+  bool _isLoadingBatteryUsage = false;
+  bool _usageAccessGranted = false;
+  String? _batteryUsageError;
+  int? _deviceBatteryLevel;
+  DateTime? _batteryUsageFetchedAt;
+  List<DebugBatteryAppUsage> _batteryUsage = <DebugBatteryAppUsage>[];
+
   @override
   void initState() {
     super.initState();
     unawaited(_loadSites());
-    unawaited(_loadDebugMode());
-    unawaited(_loadGpsPollInterval());
-  }
-
-  Future<void> _loadGpsPollInterval() async {
-    try {
-      final String? value = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _gpsPollPreferenceKey},
-      );
-      final int? rawValue = int.tryParse(value ?? '');
-      int? seconds;
-      if (rawValue != null) {
-        if (_gpsPollSecondOptions.contains(rawValue)) {
-          seconds = rawValue;
-        } else if (_legacyGpsPollMinuteOptions.contains(rawValue)) {
-          seconds = rawValue * 60;
-        }
-      }
-      if (seconds != null && mounted) {
-        setState(() {
-          _gpsPollIntervalSeconds = seconds!;
-        });
-      }
-    } catch (_) {
-      // Use default if load fails.
-    }
-  }
-
-  String _gpsPollLabel(int seconds) {
-    if (seconds < 60) {
-      return '$seconds sec';
-    }
-    return '${seconds ~/ 60} min';
-  }
-
-  void _setGpsPollIntervalSeconds(int seconds) {
-    if (_gpsPollIntervalSeconds == seconds) {
-      return;
-    }
-    setState(() {
-      _gpsPollIntervalSeconds = seconds;
-      if (_isTracking) {
-        _status = 'GPS poll interval set to ${_gpsPollLabel(seconds)}.';
-      }
-    });
-
-    unawaited(_locationChannel.invokeMethod<void>(
-      'saveSites',
-      <String, dynamic>{
-        'key': _gpsPollPreferenceKey,
-        'value': seconds.toString(),
-      },
-    ));
-
-    if (_isTracking) {
-      _trackingTimer?.cancel();
-      _trackingTimer = Timer.periodic(
-        Duration(seconds: _gpsPollIntervalSeconds),
-        (_) {
-          _pollCurrentLocation();
-        },
-      );
-      unawaited(_pollCurrentLocation());
-    }
-  }
-
-  Future<void> _loadDebugMode() async {
-    try {
-      final String? value = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': 'pref_debug_mode'},
-      );
-      if (value != null && mounted) {
-        setState(() {
-          _debugMode = value == 'true';
-        });
-      }
-    } catch (_) {
-      // Use default if load fails.
-    }
   }
 
   List<JobSite> _defaultSites() {
@@ -326,6 +216,114 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
   }
 
+  Future<void> _loadBatteryUsage() async {
+    if (!Platform.isAndroid) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _batteryUsageError =
+            'Battery usage by app is currently available on Android only.';
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoadingBatteryUsage = true;
+      _batteryUsageError = null;
+    });
+
+    try {
+      final bool hasUsageAccess = (await _locationChannel
+              .invokeMethod<bool>('hasUsageAccessPermission')) ??
+          false;
+
+      if (!hasUsageAccess) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _usageAccessGranted = false;
+          _batteryUsage = <DebugBatteryAppUsage>[];
+          _batteryUsageError =
+              'Usage access is required. Open Settings and allow Usage Access for this app.';
+        });
+        return;
+      }
+
+      final Map<Object?, Object?>? payload = await _locationChannel
+          .invokeMethod<Map<Object?, Object?>>('getAppBatteryUsage');
+
+      if (!mounted) {
+        return;
+      }
+
+      final List<dynamic> rawApps =
+          (payload?['apps'] as List<dynamic>?) ?? <dynamic>[];
+      final List<DebugBatteryAppUsage> parsed = rawApps
+          .whereType<Map<Object?, Object?>>()
+          .map((Map<Object?, Object?> item) {
+            return DebugBatteryAppUsage(
+              packageName: (item['packageName'] ?? '').toString(),
+              appName: (item['appName'] ?? '').toString(),
+              foregroundMinutes:
+                  ((item['foregroundMinutes'] as num?)?.toDouble() ?? 0),
+              estimatedBatterySharePercent:
+                  ((item['estimatedBatterySharePercent'] as num?)?.toDouble() ??
+                      0),
+            );
+          })
+          .where((DebugBatteryAppUsage item) => item.foregroundMinutes > 0)
+          .toList();
+
+      setState(() {
+        _usageAccessGranted = true;
+        _batteryUsage = parsed;
+        _deviceBatteryLevel = (payload?['deviceBatteryLevel'] as num?)?.toInt();
+        final int generatedAtEpochMs =
+            (payload?['generatedAtEpochMs'] as num?)?.toInt() ??
+                DateTime.now().millisecondsSinceEpoch;
+        _batteryUsageFetchedAt =
+            DateTime.fromMillisecondsSinceEpoch(generatedAtEpochMs);
+      });
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _batteryUsageError =
+            error.message ?? 'Could not load app battery usage.';
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _batteryUsageError = 'Could not load app battery usage.';
+      });
+    } finally {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isLoadingBatteryUsage = false;
+      });
+    }
+  }
+
+  Future<void> _openUsageAccessSettings() async {
+    try {
+      await _locationChannel.invokeMethod<bool>('openUsageAccessSettings');
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open Usage Access settings.')),
+      );
+    }
+  }
+
   Future<void> _loadBackgroundLogs() async {
     try {
       final String? raw =
@@ -411,8 +409,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     _sessionLoggedAddresses.clear();
     _dwellMinutes.clear();
-    _outsideMinutes.clear();
-    _relogEligible.clear();
     _stableSamples = 0;
     _candidateSite = null;
     _pendingSite = null;
@@ -425,7 +421,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     _trackingTimer?.cancel();
     _trackingTimer = Timer.periodic(
-      Duration(seconds: _gpsPollIntervalSeconds),
+      const Duration(seconds: _trackingIntervalSeconds),
       (_) {
         _pollCurrentLocation();
       },
@@ -493,55 +489,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
         title: 'Background Location Needed',
         message:
             'To log when the app is closed, set Location to "Allow all the time". Open app settings now?',
-        openLocationSettings: false,
-      );
-      return false;
-    }
-
-    return true;
-  }
-
-  Future<bool> _ensureForegroundLocationAccess() async {
-    if (!Platform.isAndroid) {
-      setState(() {
-        _status = 'Native GPS is implemented for Android in this build.';
-      });
-      return false;
-    }
-
-    bool serviceEnabled = false;
-    try {
-      serviceEnabled = (await _locationChannel
-              .invokeMethod<bool>('isLocationServiceEnabled')) ??
-          false;
-    } on PlatformException {
-      serviceEnabled = false;
-    }
-
-    if (!serviceEnabled) {
-      setState(() {
-        _status = 'Location services are off. Turn on GPS and try again.';
-      });
-      await _showGoToSettingsDialog(
-        title: 'Location Services Off',
-        message: 'GPS is turned off. Open Location settings now?',
-        openLocationSettings: true,
-      );
-      return false;
-    }
-
-    final bool granted = (await _locationChannel
-            .invokeMethod<bool>('checkAndRequestPermission')) ??
-        false;
-    if (!granted) {
-      setState(() {
-        _status =
-            'Location permission denied. Allow location access and try again.';
-      });
-      await _showGoToSettingsDialog(
-        title: 'Location Permission Needed',
-        message:
-            'Location permission is required. Open app permission settings now?',
         openLocationSettings: false,
       );
       return false;
@@ -694,29 +641,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
     );
     final bool inGeofence = nearest.distanceMeters <= effectiveRadius;
 
-    final double increment = elapsedMinutes.clamp(0, 3);
-    for (final JobSite site in _sites) {
-      final double distanceToSite = _distanceMeters(
-        fix.lat,
-        fix.lng,
-        site.lat,
-        site.lng,
-      );
-      final String key = site.address;
-      if (distanceToSite > effectiveRadius) {
-        final double outside = (_outsideMinutes[key] ?? 0) + increment;
-        _outsideMinutes[key] = outside;
-        if (outside >= _outsideMinutesForRelog) {
-          _relogEligible[key] = true;
-        }
-      } else {
-        _outsideMinutes[key] = 0;
-      }
-    }
-
     if (inGeofence) {
       _stableSamples += 1;
       _candidateSite = nearest.site;
+      final double increment = elapsedMinutes.clamp(0, 3);
       _dwellMinutes[nearest.site.address] =
           (_dwellMinutes[nearest.site.address] ?? 0) + increment;
     } else {
@@ -728,10 +656,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final double dwell = _dwellMinutes[_candidateSite!.address] ?? 0;
       final bool alreadyLogged =
           _sessionLoggedAddresses.contains(_candidateSite!.address);
-      final bool relogAllowed =
-          _relogEligible[_candidateSite!.address] ?? false;
 
-      if ((!alreadyLogged || relogAllowed) &&
+      if (!alreadyLogged &&
           dwell >= _candidateSite!.requiredDwellMinutes.toDouble() &&
           _stableSamples >= _requiredStableSamples) {
         _showConfirmationPrompt(_candidateSite!);
@@ -800,8 +726,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     setState(() {
       _sessionLoggedAddresses.add(site.address);
-      _relogEligible[site.address] = false;
-      _outsideMinutes[site.address] = 0;
       _pendingSite = null;
       _promptCountdown = 0;
       _status = autoLogged
@@ -842,27 +766,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
         'motion: ${lowSpeed ? 'stationary' : 'moving'} | '
         'geofence: ${inGeofence ? 'inside' : 'outside'} '
         '(${nearest.distanceMeters.toStringAsFixed(0)}/${effectiveRadius.toStringAsFixed(0)}m)';
-  }
-
-  String _formatTimestamp(DateTime dt) {
-    final String period = dt.hour < 12 ? 'AM' : 'PM';
-    final int hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-    final String minute = dt.minute.toString().padLeft(2, '0');
-    const List<String> months = <String>[
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}  $hour:$minute $period';
   }
 
   Future<_GeocodePoint?> _lookupCoordinates(_AddLocationInput input) async {
@@ -913,111 +816,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
   }
 
-  Future<_ReverseGeocodeAddress?> _lookupAddressByCoordinates(
-    double lat,
-    double lng,
-  ) async {
-    final Uri uri = Uri.https(
-      'nominatim.openstreetmap.org',
-      '/reverse',
-      <String, String>{
-        'lat': lat.toString(),
-        'lon': lng.toString(),
-        'format': 'jsonv2',
-        'addressdetails': '1',
-      },
-    );
-
-    try {
-      final http.Response response = await http.get(
-        uri,
-        headers: <String, String>{
-          'User-Agent': 'lokalog-app/1.0 (mobile field logging demo)',
-          'Accept': 'application/json',
-        },
-      ).timeout(const Duration(seconds: 12));
-
-      if (response.statusCode != 200) {
-        return null;
-      }
-
-      final dynamic decoded = jsonDecode(response.body);
-      if (decoded is! Map<String, dynamic>) {
-        return null;
-      }
-
-      final Map<String, dynamic> address =
-          (decoded['address'] as Map<String, dynamic>?) ?? <String, dynamic>{};
-      final String houseNumber =
-          (address['house_number'] ?? '').toString().trim();
-      final String road = (address['road'] ?? '').toString().trim();
-      final String street = <String>[houseNumber, road]
-          .where((String value) => value.isNotEmpty)
-          .join(' ');
-
-      final String city = (address['city'] ??
-              address['town'] ??
-              address['village'] ??
-              address['municipality'] ??
-              address['county'] ??
-              '')
-          .toString()
-          .trim();
-
-      String state =
-          (address['state_code'] ?? '').toString().trim().toUpperCase();
-      if (state.isEmpty) {
-        state = (address['state'] ?? '').toString().trim().toUpperCase();
-      }
-      if (state.length > 2) {
-        state = state.substring(0, 2);
-      }
-
-      final String zip = (address['postcode'] ?? '').toString().trim();
-
-      if (street.isEmpty || city.isEmpty || state.isEmpty || zip.isEmpty) {
-        return null;
-      }
-
-      return _ReverseGeocodeAddress(
-        street: street,
-        city: city,
-        state: state,
-        zip: zip,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<LocationFix?> _getCurrentLocationFix() async {
-    try {
-      final Map<Object?, Object?>? position = await _locationChannel
-          .invokeMethod<Map<Object?, Object?>>(
-            'getCurrentLocation',
-          )
-          .timeout(const Duration(seconds: 12));
-
-      final double? lat = (position?['latitude'] as num?)?.toDouble();
-      final double? lng = (position?['longitude'] as num?)?.toDouble();
-      if (lat == null || lng == null) {
-        return null;
-      }
-
-      return LocationFix(
-        lat: lat,
-        lng: lng,
-        accuracyMeters: ((position?['accuracy'] as num?)?.toDouble() ?? 999),
-        speedMetersPerSecond: max(
-          0,
-          ((position?['speed'] as num?)?.toDouble() ?? 0),
-        ),
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
   SiteDistance _findNearestSite(LocationFix fix, List<JobSite> sites) {
     JobSite nearest = sites.first;
     double best = _distanceMeters(fix.lat, fix.lng, nearest.lat, nearest.lng);
@@ -1056,10 +854,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (_selectedTabIndex == 2) {
       return 'Settings';
     }
-    if (_selectedTabIndex == 3) {
-      return 'Debug Tools';
-    }
-    return 'Settings';
+    return 'Debug Tools';
   }
 
   IconData get _appBarSectionIcon {
@@ -1072,221 +867,59 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (_selectedTabIndex == 2) {
       return Icons.settings;
     }
-    if (_selectedTabIndex == 3) {
-      return Icons.bug_report;
-    }
-    return Icons.settings;
-  }
-
-  Future<void> _refreshBatteryUsage() async {
-    setState(() {
-      _isLoadingBattery = true;
-    });
-
-    try {
-      final int? level =
-          await _locationChannel.invokeMethod<int>('getBatteryLevel');
-      final String? state =
-          await _locationChannel.invokeMethod<String>('getBatteryState');
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _batteryLevel = level;
-        _batteryState = state ?? 'unknown';
-      });
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to read battery usage.')),
-      );
-    } finally {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _isLoadingBattery = false;
-      });
-    }
+    return Icons.bug_report;
   }
 
   Future<void> _onAddNewLocation() async {
-    if (_sites.length >= 5) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('Only 5 locations are allowed. Delete one to add another.'),
-        ),
-      );
-      return;
-    }
-
-    _AddLocationInput? prefill;
-    String? sheetError;
-
-    while (true) {
-      if (!mounted) {
-        return;
-      }
-      final _AddLocationInput? input =
-          await showModalBottomSheet<_AddLocationInput>(
-        context: context,
-        isScrollControlled: true,
-        builder: (BuildContext sheetContext) {
-          return _AddLocationSheet(
-            title: 'Add New Location',
-            submitLabel: 'Add',
-            logMinuteOptions: _logMinuteOptions,
-            initialInput: prefill,
-            errorMessage: sheetError,
-          );
-        },
-      );
-
-      if (input == null || !mounted) {
-        return;
-      }
-
-      if (input.name.isEmpty ||
-          input.street.isEmpty ||
-          input.city.isEmpty ||
-          input.state.isEmpty ||
-          input.zip.isEmpty) {
-        prefill = input;
-        sheetError = 'Please fill in name, street, city, state, and ZIP.';
-        continue;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Looking up latitude/longitude...')),
-      );
-
-      final _GeocodePoint? point = await _lookupCoordinates(input);
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      if (point == null) {
-        prefill = input;
-        sheetError =
-            'Address not found. Please check the spelling and try again.';
-        continue;
-      }
-
-      final JobSite newSite = JobSite(
-        name: input.name,
-        street: input.street,
-        city: input.city,
-        state: input.state,
-        zip: input.zip,
-        lat: point.lat,
-        lng: point.lng,
-        requiredDwellMinutes: input.requiredMinutes,
-      );
-
-      setState(() {
-        _sites.add(newSite);
-        _status =
-            'Added location: ${newSite.name} at ${newSite.address} (${input.requiredMinutes}m).';
-      });
-      unawaited(_saveSites());
-      return;
-    }
-  }
-
-  Future<void> _onAddCurrentLocation() async {
-    if (_sites.length >= 5) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('Only 5 locations are allowed. Delete one to add another.'),
-        ),
-      );
-      return;
-    }
-
-    final bool hasAccess = await _ensureForegroundLocationAccess();
-    if (!hasAccess || !mounted) {
-      return;
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Reading current GPS coordinates...')),
-    );
-
-    final LocationFix? fix = await _getCurrentLocationFix();
-    if (!mounted) {
-      return;
-    }
-
-    if (fix == null) {
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Unable to read current GPS coordinates.')),
-      );
-      return;
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Looking up address from coordinates...')),
-    );
-
-    final _ReverseGeocodeAddress? reverse = await _lookupAddressByCoordinates(
-      fix.lat,
-      fix.lng,
-    );
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-    if (reverse == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not resolve address from current coordinates.'),
-        ),
-      );
-      return;
-    }
-
     final _AddLocationInput? result =
         await showModalBottomSheet<_AddLocationInput>(
       context: context,
       isScrollControlled: true,
       builder: (BuildContext sheetContext) {
         return _AddLocationSheet(
-          title: 'Name This Current Location',
-          submitLabel: 'Save Location',
+          title: 'Add New Location',
+          submitLabel: 'Add',
           logMinuteOptions: _logMinuteOptions,
-          initialInput: _AddLocationInput(
-            name: '',
-            street: reverse.street,
-            city: reverse.city,
-            state: reverse.state,
-            zip: reverse.zip,
-            requiredMinutes: _logMinuteOptions.first,
-          ),
         );
       },
     );
 
-    if (result == null || !mounted) {
+    if (result == null) {
       return;
     }
 
-    if (result.name.isEmpty) {
+    if (!mounted) {
+      return;
+    }
+
+    if (result.name.isEmpty ||
+        result.street.isEmpty ||
+        result.city.isEmpty ||
+        result.state.isEmpty ||
+        result.zip.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a location name.')),
+        const SnackBar(
+            content: Text('Please fill name, street, city, state, and ZIP.')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Looking up latitude/longitude...')),
+    );
+
+    final _GeocodePoint? point = await _lookupCoordinates(result);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    if (point == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Could not geocode address. Please verify and try again.'),
+        ),
       );
       return;
     }
@@ -1297,101 +930,94 @@ class _ScenarioPageState extends State<ScenarioPage> {
       city: result.city,
       state: result.state,
       zip: result.zip,
-      lat: fix.lat,
-      lng: fix.lng,
+      lat: point.lat,
+      lng: point.lng,
       requiredDwellMinutes: result.requiredMinutes,
     );
 
     setState(() {
       _sites.add(newSite);
       _status =
-          'Added current location: ${newSite.name} at ${newSite.address} (${result.requiredMinutes}m).';
+          'Added location: ${newSite.name} at ${newSite.address} (${result.requiredMinutes}m).';
     });
     unawaited(_saveSites());
   }
 
   Future<void> _onEditLocation(int index, JobSite site) async {
-    // Edit retry loop — keeps sheet open on geocode failure.
-    _AddLocationInput prefill = _AddLocationInput(
-      name: site.name,
-      street: site.street,
-      city: site.city,
-      state: site.state,
-      zip: site.zip,
-      requiredMinutes: site.requiredDwellMinutes,
+    final _AddLocationInput? result =
+        await showModalBottomSheet<_AddLocationInput>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext sheetContext) {
+        return _AddLocationSheet(
+          title: 'Edit Location',
+          submitLabel: 'Save',
+          logMinuteOptions: _logMinuteOptions,
+          initialInput: _AddLocationInput(
+            name: site.name,
+            street: site.street,
+            city: site.city,
+            state: site.state,
+            zip: site.zip,
+            requiredMinutes: site.requiredDwellMinutes,
+          ),
+        );
+      },
     );
-    String? sheetError;
 
-    while (true) {
-      if (!mounted) {
-        return;
-      }
-      final _AddLocationInput? input =
-          await showModalBottomSheet<_AddLocationInput>(
-        context: context,
-        isScrollControlled: true,
-        builder: (BuildContext sheetContext) {
-          return _AddLocationSheet(
-            title: 'Edit Location',
-            submitLabel: 'Save',
-            logMinuteOptions: _logMinuteOptions,
-            initialInput: prefill,
-            errorMessage: sheetError,
-          );
-        },
-      );
-
-      if (input == null || !mounted) {
-        return;
-      }
-
-      if (input.name.isEmpty ||
-          input.street.isEmpty ||
-          input.city.isEmpty ||
-          input.state.isEmpty ||
-          input.zip.isEmpty) {
-        prefill = input;
-        sheetError = 'Please fill in name, street, city, state, and ZIP.';
-        continue;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Looking up updated latitude/longitude...')),
-      );
-
-      final _GeocodePoint? point = await _lookupCoordinates(input);
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      if (point == null) {
-        prefill = input;
-        sheetError =
-            'Address not found. Please check the spelling and try again.';
-        continue;
-      }
-
-      final JobSite updatedSite = JobSite(
-        name: input.name,
-        street: input.street,
-        city: input.city,
-        state: input.state,
-        zip: input.zip,
-        lat: point.lat,
-        lng: point.lng,
-        requiredDwellMinutes: input.requiredMinutes,
-      );
-
-      setState(() {
-        _sites[index] = updatedSite;
-        _status =
-            'Updated location: ${updatedSite.name} at ${updatedSite.address} (${input.requiredMinutes}m).';
-      });
-      unawaited(_saveSites());
+    if (result == null || !mounted) {
       return;
     }
+
+    if (result.name.isEmpty ||
+        result.street.isEmpty ||
+        result.city.isEmpty ||
+        result.state.isEmpty ||
+        result.zip.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Please fill name, street, city, state, and ZIP.')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Looking up updated latitude/longitude...')),
+    );
+
+    final _GeocodePoint? point = await _lookupCoordinates(result);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    if (point == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Could not geocode address. Please verify and try again.'),
+        ),
+      );
+      return;
+    }
+
+    final JobSite updatedSite = JobSite(
+      name: result.name,
+      street: result.street,
+      city: result.city,
+      state: result.state,
+      zip: result.zip,
+      lat: point.lat,
+      lng: point.lng,
+      requiredDwellMinutes: result.requiredMinutes,
+    );
+
+    setState(() {
+      _sites[index] = updatedSite;
+      _status =
+          'Updated location: ${updatedSite.name} at ${updatedSite.address} (${result.requiredMinutes}m).';
+    });
+    unawaited(_saveSites());
   }
 
   Future<void> _onDeleteLocation(int index, JobSite site) async {
@@ -1457,144 +1083,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
     });
   }
 
-  Widget _buildPageFrame(List<Widget> children) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: isDark
-              ? const <Color>[Color(0xFF091411), Color(0xFF0F1F1C)]
-              : const <Color>[Color(0xFFF5F1EA), Color(0xFFE9F2EC)],
-        ),
-      ),
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
-        children: children,
-      ),
-    );
-  }
-
-  Widget _buildHeroCard({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    Widget? action,
-  }) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(28),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? <Color>[
-                  scheme.primary.withValues(alpha: 0.38),
-                  scheme.secondary.withValues(alpha: 0.2),
-                ]
-              : <Color>[
-                  scheme.primaryContainer,
-                  scheme.secondaryContainer,
-                ],
-        ),
-      ),
-      child: Row(
-        children: <Widget>[
-          CircleAvatar(
-            radius: 22,
-            backgroundColor: scheme.onPrimaryContainer.withValues(alpha: 0.14),
-            child: Icon(icon, color: scheme.onPrimaryContainer),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                    color: scheme.onPrimaryContainer,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: TextStyle(color: scheme.onPrimaryContainer),
-                ),
-              ],
-            ),
-          ),
-          if (action != null) action,
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSectionTitle(String title, IconData icon) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 10, 4, 10),
-      child: Row(
-        children: <Widget>[
-          Icon(icon, size: 18, color: scheme.primary),
-          const SizedBox(width: 8),
-          Text(
-            title,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMetricChip(String label, String value) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        '$label: $value',
-        style: TextStyle(
-          fontWeight: FontWeight.w700,
-          color: scheme.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-
   Widget _buildLogScreen() {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    return _buildPageFrame(
-      <Widget>[
-        _buildHeroCard(
-          title: _isTracking ? 'Tracking in progress' : 'Ready to track',
-          subtitle: _status,
-          icon: _isTracking ? Icons.radar : Icons.route,
-          action: FilledButton(
-            onPressed: _isTracking ? _stopScenario : _startScenario,
-            child: Text(_isTracking ? 'Stop' : 'Start'),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: <Widget>[
-            _buildMetricChip('Locations', '${_sites.length}'),
-            _buildMetricChip('Logs', '${_logs.length}'),
-            _buildMetricChip('Mode', _isTracking ? 'Active' : 'Idle'),
-          ],
-        ),
-        _buildSectionTitle('Live Status', Icons.sensors),
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -1615,22 +1107,19 @@ class _ScenarioPageState extends State<ScenarioPage> {
           ),
         if (_latestNearest != null)
           Card(
-            color: scheme.secondaryContainer,
+            color: Colors.blue.shade50,
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Text(
                 'Countdown to log ${_latestNearest!.site.name}: '
                 '${_minutesRemainingToLog(_latestNearest!.site).toStringAsFixed(1)} minutes remaining',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: scheme.onSecondaryContainer,
-                ),
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
           ),
         if (_pendingSite != null)
           Card(
-            color: scheme.tertiaryContainer,
+            color: Colors.amber.shade50,
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -1638,16 +1127,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 children: <Widget>[
                   Text(
                     'Confirm job at ${_pendingSite!.address}?',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: scheme.onTertiaryContainer,
-                    ),
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 6),
-                  Text(
-                    'Auto-log in ${_promptCountdown}s if no response.',
-                    style: TextStyle(color: scheme.onTertiaryContainer),
-                  ),
+                  Text('Auto-log in ${_promptCountdown}s if no response.'),
                   const SizedBox(height: 10),
                   Row(
                     children: <Widget>[
@@ -1677,17 +1160,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
             ),
           ),
         const SizedBox(height: 16),
-        _buildSectionTitle('Locations Log', Icons.fact_check_outlined),
+        const Text(
+          'Locations Log',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
         if (_logs.isEmpty)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'No locations logged yet. Start tracking and stay near a site to create your first entry.',
-                style: TextStyle(color: scheme.onSurfaceVariant),
-              ),
-            ),
-          )
+          const Text('No locations logged yet.')
         else
           ..._logs.asMap().entries.map((MapEntry<int, JobLog> entry) {
             final int index = entry.key;
@@ -1696,7 +1175,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
               child: ListTile(
                 title: Text(log.address),
                 subtitle: Text(
-                  '${_formatTimestamp(log.timestamp)}\n'
+                  '${log.timestamp.toIso8601String()}\n'
+                  'Lat/Lng: ${log.lat.toStringAsFixed(5)}, ${log.lng.toStringAsFixed(5)}\n'
                   'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
                   '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}',
                 ),
@@ -1714,9 +1194,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       child: Text('Delete'),
                     ),
                   ],
-                  child: const Icon(
-                    Icons.delete,
-                    color: Colors.red,
+                  child: Icon(
+                    log.autoLogged ? Icons.flag : Icons.check_circle,
+                    color: log.autoLogged ? Colors.orange : Colors.green,
                   ),
                 ),
               ),
@@ -1727,14 +1207,25 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Widget _buildSettingsScreen() {
-    return _buildPageFrame(
-      <Widget>[
-        _buildHeroCard(
-          title: 'Preferences',
-          subtitle: 'Fine-tune appearance and tracking behavior.',
-          icon: Icons.tune,
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        Card(
+          child: SwitchListTile(
+            title: const Text('Debug Mode'),
+            subtitle: const Text('Show or hide the Debug tab and tools.'),
+            value: _debugModeEnabled,
+            onChanged: (bool enabled) {
+              setState(() {
+                _debugModeEnabled = enabled;
+                if (!_debugModeEnabled && _selectedTabIndex == 3) {
+                  _selectedTabIndex = 2;
+                }
+              });
+            },
+          ),
         ),
-        _buildSectionTitle('Appearance', Icons.palette_outlined),
+        const SizedBox(height: 12),
         Card(
           child: SwitchListTile(
             title: const Text('Dark Theme'),
@@ -1743,80 +1234,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
             onChanged: widget.onDarkModeChanged,
           ),
         ),
-        _buildSectionTitle('Developer Tools', Icons.bug_report_outlined),
-        _buildSectionTitle('GPS Polling', Icons.gps_fixed),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'How Often To Poll GPS',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                SegmentedButton<int>(
-                  segments: const <ButtonSegment<int>>[
-                    ButtonSegment<int>(
-                      value: 30,
-                      label: Text('30 sec'),
-                      icon: Icon(Icons.bolt),
-                    ),
-                    ButtonSegment<int>(
-                      value: 60,
-                      label: Text('1 min'),
-                      icon: Icon(Icons.timer_outlined),
-                    ),
-                    ButtonSegment<int>(
-                      value: 300,
-                      label: Text('5 min'),
-                      icon: Icon(Icons.timer_rounded),
-                    ),
-                  ],
-                  selected: <int>{_gpsPollIntervalSeconds},
-                  onSelectionChanged: (Set<int> selected) {
-                    if (selected.isEmpty) {
-                      return;
-                    }
-                    _setGpsPollIntervalSeconds(selected.first);
-                  },
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Current interval: every ${_gpsPollLabel(_gpsPollIntervalSeconds)}.',
-                ),
-              ],
-            ),
-          ),
-        ),
-        Card(
-          child: SwitchListTile(
-            title: const Text('Debug Mode'),
-            subtitle:
-                const Text('Enable extra debug behavior for troubleshooting.'),
-            value: _debugMode,
-            onChanged: (bool enabled) {
-              setState(() {
-                _debugMode = enabled;
-                if (!enabled && _selectedTabIndex == 3) {
-                  _selectedTabIndex = 2;
-                }
-              });
-              unawaited(_locationChannel.invokeMethod<void>(
-                'saveSites',
-                <String, dynamic>{
-                  'key': 'pref_debug_mode',
-                  'value': enabled.toString(),
-                },
-              ));
-              if (enabled) {
-                unawaited(_refreshBatteryUsage());
-              }
-            },
-          ),
-        ),
-        _buildSectionTitle('Tracking Controls', Icons.play_circle_outline),
+        const SizedBox(height: 12),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -1852,7 +1270,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
             ),
           ),
         ),
-        _buildSectionTitle('Permission Shortcuts', Icons.key_outlined),
+        const SizedBox(height: 12),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -1888,152 +1306,175 @@ class _ScenarioPageState extends State<ScenarioPage> {
     );
   }
 
-  Widget _buildDebugScreen() {
-    final String levelText = _batteryLevel == null ? '--' : '$_batteryLevel%';
-    final String usedText =
-        _batteryLevel == null ? '--' : '${100 - _batteryLevel!}%';
-    return _buildPageFrame(<Widget>[
-      _buildHeroCard(
-        title: 'Diagnostics',
-        subtitle: 'Quick battery telemetry for field testing.',
-        icon: Icons.bug_report,
-      ),
-      _buildSectionTitle('Battery Usage', Icons.battery_4_bar),
-      Card(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              const SizedBox(height: 8),
-              Text('Battery level: $levelText'),
-              const SizedBox(height: 4),
-              Text('Battery used: $usedText'),
-              const SizedBox(height: 4),
-              Text('Battery state: ${_batteryState ?? 'unknown'}'),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: _isLoadingBattery ? null : _refreshBatteryUsage,
-                icon: const Icon(Icons.battery_full),
-                label: Text(
-                  _isLoadingBattery ? 'Refreshing...' : 'Refresh Battery',
+  Widget _buildLocationsScreen() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        const Text(
+          'Locations',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        if (_sites.isEmpty)
+          const Text('No locations added yet.')
+        else
+          ..._sites.asMap().entries.map((MapEntry<int, JobSite> entry) {
+            final JobSite site = entry.value;
+            return Card(
+              child: ListTile(
+                leading: CircleAvatar(child: Text('${entry.key + 1}')),
+                title: Text(site.name),
+                subtitle: Text(
+                  '${site.address}\n'
+                  'Lat: ${site.lat.toStringAsFixed(5)}, Lng: ${site.lng.toStringAsFixed(5)}\n'
+                  'Log after: ${site.requiredDwellMinutes} minutes',
+                ),
+                isThreeLine: true,
+                trailing: PopupMenuButton<String>(
+                  onSelected: (String action) {
+                    if (action == 'edit') {
+                      _onEditLocation(entry.key, site);
+                    } else if (action == 'delete') {
+                      _onDeleteLocation(entry.key, site);
+                    }
+                  },
+                  itemBuilder: (BuildContext context) =>
+                      const <PopupMenuEntry<String>>[
+                    PopupMenuItem<String>(
+                      value: 'edit',
+                      child: Text('Edit'),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'delete',
+                      child: Text('Delete'),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
-        ),
-      ),
-    ]);
+            );
+          }),
+      ],
+    );
   }
 
-  Widget _buildLocationsScreen() {
-    return _buildPageFrame(<Widget>[
-      _buildHeroCard(
-        title: 'Saved Locations',
-        subtitle: 'Add up to 5 sites. Each site logs after its dwell time.',
-        icon: Icons.place,
-        action: FilledButton.icon(
-          onPressed: _onAddNewLocation,
-          icon: const Icon(Icons.add_location_alt),
-          label: const Text('Add New'),
-        ),
-      ),
-      _buildSectionTitle('Quick Add', Icons.my_location_outlined),
-      Card(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              const Text(
-                'Add From Current Position',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                onPressed: _onAddCurrentLocation,
-                icon: const Icon(Icons.my_location),
-                label: const Text('Use Current Location'),
-              ),
-            ],
-          ),
-        ),
-      ),
-      _buildSectionTitle('Location List', Icons.list_alt_outlined),
-      if (_sites.isEmpty)
-        const Card(
+  Widget _buildDebugScreen() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        Card(
           child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('No locations added yet.'),
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Debug Tools',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    FilledButton.icon(
+                      onPressed:
+                          _isLoadingBatteryUsage ? null : _loadBatteryUsage,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Refresh Battery Usage'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _openUsageAccessSettings,
+                      icon: const Icon(Icons.admin_panel_settings_outlined),
+                      label: const Text('Usage Access Settings'),
+                    ),
+                  ],
+                ),
+                if (_isLoadingBatteryUsage) ...<Widget>[
+                  const SizedBox(height: 10),
+                  const LinearProgressIndicator(),
+                ],
+              ],
+            ),
           ),
-        )
-      else
-        ..._sites.asMap().entries.map((MapEntry<int, JobSite> entry) {
-          final JobSite site = entry.value;
-          return Card(
-            child: ListTile(
-              leading: CircleAvatar(child: Text('${entry.key + 1}')),
-              title: Text(site.name),
-              subtitle: Text(
-                '${site.address}\n'
-                'Lat: ${site.lat.toStringAsFixed(5)}, Lng: ${site.lng.toStringAsFixed(5)}\n'
-                'Log after: ${site.requiredDwellMinutes} minutes',
-              ),
-              isThreeLine: true,
-              trailing: PopupMenuButton<String>(
-                onSelected: (String action) {
-                  if (action == 'edit') {
-                    _onEditLocation(entry.key, site);
-                  } else if (action == 'delete') {
-                    _onDeleteLocation(entry.key, site);
-                  }
-                },
-                itemBuilder: (BuildContext context) =>
-                    const <PopupMenuEntry<String>>[
-                  PopupMenuItem<String>(
-                    value: 'edit',
-                    child: Text('Edit'),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  _usageAccessGranted
+                      ? 'Usage Access: Granted'
+                      : 'Usage Access: Not Granted',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: _usageAccessGranted ? Colors.green : Colors.orange,
                   ),
-                  PopupMenuItem<String>(
-                    value: 'delete',
-                    child: Text('Delete'),
+                ),
+                if (_deviceBatteryLevel != null) ...<Widget>[
+                  const SizedBox(height: 6),
+                  Text('Current device battery: ${_deviceBatteryLevel!}%'),
+                ],
+                if (_batteryUsageFetchedAt != null) ...<Widget>[
+                  const SizedBox(height: 6),
+                  Text('Last updated: ${_batteryUsageFetchedAt!.toLocal()}'),
+                ],
+                if (_batteryUsageError != null) ...<Widget>[
+                  const SizedBox(height: 8),
+                  Text(
+                    _batteryUsageError!,
+                    style: const TextStyle(color: Colors.redAccent),
                   ),
                 ],
-              ),
+              ],
             ),
-          );
-        }),
-    ]);
+          ),
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'Battery Usage by App (Estimated)',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        if (_batteryUsage.isEmpty && !_isLoadingBatteryUsage)
+          const Text('No data yet. Grant Usage Access and tap Refresh.')
+        else
+          ..._batteryUsage.map((DebugBatteryAppUsage app) {
+            final double normalized =
+                (app.estimatedBatterySharePercent / 100).clamp(0, 1);
+            return Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      app.appName,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(app.packageName),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Foreground: ${app.foregroundMinutes.toStringAsFixed(1)} min | '
+                      'Estimated share: ${app.estimatedBatterySharePercent.toStringAsFixed(1)}%',
+                    ),
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(value: normalized),
+                  ],
+                ),
+              ),
+            );
+          }),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final List<NavigationDestination> destinations = <NavigationDestination>[
-      const NavigationDestination(
-        icon: Icon(Icons.fact_check_outlined),
-        selectedIcon: Icon(Icons.fact_check),
-        label: 'Log',
-      ),
-      const NavigationDestination(
-        icon: Icon(Icons.place_outlined),
-        selectedIcon: Icon(Icons.place),
-        label: 'Locations',
-      ),
-      const NavigationDestination(
-        icon: Icon(Icons.settings_outlined),
-        selectedIcon: Icon(Icons.settings),
-        label: 'Settings',
-      ),
-      if (_debugMode)
-        const NavigationDestination(
-          icon: Icon(Icons.bug_report_outlined),
-          selectedIcon: Icon(Icons.bug_report),
-          label: 'Debug',
-        ),
-    ];
-
     return Scaffold(
-      extendBodyBehindAppBar: false,
       appBar: AppBar(
         toolbarHeight: 68,
         title: AnimatedSwitcher(
@@ -2084,20 +1525,69 @@ class _ScenarioPageState extends State<ScenarioPage> {
           _buildLogScreen(),
           _buildLocationsScreen(),
           _buildSettingsScreen(),
-          if (_debugMode) _buildDebugScreen(),
+          if (_debugModeEnabled) _buildDebugScreen(),
         ],
       ),
+      floatingActionButton: _selectedTabIndex == 1
+          ? FloatingActionButton.extended(
+              onPressed: _onAddNewLocation,
+              icon: const Icon(Icons.add_location_alt),
+              label: const Text('Add New'),
+            )
+          : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedTabIndex,
         onDestinationSelected: (int index) {
           setState(() {
             _selectedTabIndex = index;
           });
+          if (_debugModeEnabled &&
+              index == 3 &&
+              _batteryUsage.isEmpty &&
+              !_isLoadingBatteryUsage) {
+            unawaited(_loadBatteryUsage());
+          }
         },
-        destinations: destinations,
+        destinations: <NavigationDestination>[
+          const NavigationDestination(
+            icon: Icon(Icons.fact_check_outlined),
+            selectedIcon: Icon(Icons.fact_check),
+            label: 'Log',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.place_outlined),
+            selectedIcon: Icon(Icons.place),
+            label: 'Locations',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings),
+            label: 'Settings',
+          ),
+          if (_debugModeEnabled)
+            const NavigationDestination(
+              icon: Icon(Icons.bug_report_outlined),
+              selectedIcon: Icon(Icons.bug_report),
+              label: 'Debug',
+            ),
+        ],
       ),
     );
   }
+}
+
+class DebugBatteryAppUsage {
+  DebugBatteryAppUsage({
+    required this.packageName,
+    required this.appName,
+    required this.foregroundMinutes,
+    required this.estimatedBatterySharePercent,
+  });
+
+  final String packageName;
+  final String appName;
+  final double foregroundMinutes;
+  final double estimatedBatterySharePercent;
 }
 
 class JobSite {
@@ -2216,34 +1706,18 @@ class _GeocodePoint {
   final double lng;
 }
 
-class _ReverseGeocodeAddress {
-  _ReverseGeocodeAddress({
-    required this.street,
-    required this.city,
-    required this.state,
-    required this.zip,
-  });
-
-  final String street;
-  final String city;
-  final String state;
-  final String zip;
-}
-
 class _AddLocationSheet extends StatefulWidget {
   const _AddLocationSheet({
     required this.title,
     required this.submitLabel,
     required this.logMinuteOptions,
     this.initialInput,
-    this.errorMessage,
   });
 
   final String title;
   final String submitLabel;
   final List<int> logMinuteOptions;
   final _AddLocationInput? initialInput;
-  final String? errorMessage;
 
   @override
   State<_AddLocationSheet> createState() => _AddLocationSheetState();
@@ -2288,19 +1762,11 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
     super.dispose();
   }
 
-  String _toTitleCase(String value) {
-    return value.trim().splitMapJoin(
-          RegExp(r'\b\w'),
-          onMatch: (Match m) => m.group(0)!.toUpperCase(),
-          onNonMatch: (String s) => s.toLowerCase(),
-        );
-  }
-
   void _submit() {
     final _AddLocationInput input = _AddLocationInput(
-      name: _toTitleCase(_nameController.text),
-      street: _toTitleCase(_streetController.text),
-      city: _toTitleCase(_cityController.text),
+      name: _nameController.text.trim(),
+      street: _streetController.text.trim(),
+      city: _cityController.text.trim(),
       state: _stateController.text.trim().toUpperCase(),
       zip: _zipController.text.trim(),
       requiredMinutes: _selectedMinutes,
@@ -2329,37 +1795,6 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                     style: const TextStyle(
                         fontSize: 18, fontWeight: FontWeight.bold),
                   ),
-                  if (widget.errorMessage != null) ...<Widget>[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.errorContainer,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: <Widget>[
-                          Icon(
-                            Icons.error_outline,
-                            color:
-                                Theme.of(context).colorScheme.onErrorContainer,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              widget.errorMessage!,
-                              style: TextStyle(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onErrorContainer,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _nameController,
