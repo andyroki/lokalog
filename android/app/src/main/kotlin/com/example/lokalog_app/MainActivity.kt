@@ -35,6 +35,28 @@ class MainActivity : FlutterActivity() {
 		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
 			.setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
 				when (call.method) {
+					"loadPreference" -> {
+						val key = call.argument<String>("key")
+						if (key.isNullOrBlank()) {
+							result.error("INVALID_ARGUMENT", "Missing key", null)
+							return@setMethodCallHandler
+						}
+						val prefs = getSharedPreferences("lokalog_store", MODE_PRIVATE)
+						result.success(prefs.getString(key, null))
+					}
+
+					"savePreference" -> {
+						val key = call.argument<String>("key")
+						val value = call.argument<String>("value")
+						if (key.isNullOrBlank() || value == null) {
+							result.error("INVALID_ARGUMENT", "Missing key or value", null)
+							return@setMethodCallHandler
+						}
+						val prefs = getSharedPreferences("lokalog_store", MODE_PRIVATE)
+						prefs.edit().putString(key, value).apply()
+						result.success(null)
+					}
+
 					"isLocationServiceEnabled" -> {
 						result.success(isLocationServiceEnabled())
 					}

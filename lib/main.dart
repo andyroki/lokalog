@@ -51,7 +51,7 @@ class _LokaLogAppState extends State<LokaLogApp> {
       _themeMode = enabled ? ThemeMode.dark : ThemeMode.light;
     });
     unawaited(_prefChannel.invokeMethod<void>(
-      'saveSites',
+      'savePreference',
       <String, dynamic>{
         'key': _darkModePreferenceKey,
         'value': enabled.toString(),
@@ -1727,7 +1727,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 }
               });
               unawaited(_locationChannel.invokeMethod<void>(
-                'saveSites',
+                'savePreference',
                 <String, dynamic>{
                   'key': _debugModePreferenceKey,
                   'value': enabled.toString(),
