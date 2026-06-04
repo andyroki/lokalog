@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:battery_plus/battery_plus.dart';
 import 'package:http/http.dart' as http;
 
 void main() {
@@ -99,7 +100,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
   String _status = 'Open Settings to start tracking.';
   int _stableSamples = 0;
   bool _isTracking = false;
+  bool _debugMode = false;
   int _selectedTabIndex = 0;
+  final Battery _battery = Battery();
+  int? _batteryLevel;
+  BatteryState? _batteryState;
+  bool _isLoadingBattery = false;
   DateTime? _lastFixAt;
   SiteDistance? _latestNearest;
 
@@ -889,7 +895,59 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (_selectedTabIndex == 1) {
       return 'LokaLog - Locations';
     }
+    if (_selectedTabIndex == 2) {
+      return 'LokaLog - Settings';
+    }
+    if (_selectedTabIndex == 3) {
+      return 'LokaLog - Debug';
+    }
     return 'LokaLog - Settings';
+  }
+
+  Future<void> _refreshBatteryUsage() async {
+    setState(() {
+      _isLoadingBattery = true;
+    });
+
+    try {
+      final int level = await _battery.batteryLevel;
+      final BatteryState state = await _battery.batteryState;
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _batteryLevel = level;
+        _batteryState = state;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to read battery usage.')),
+      );
+    } finally {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isLoadingBattery = false;
+      });
+    }
+  }
+
+  String _batteryStateLabel(BatteryState? state) {
+    switch (state) {
+      case BatteryState.charging:
+        return 'charging';
+      case BatteryState.discharging:
+        return 'discharging';
+      case BatteryState.full:
+        return 'full';
+      case BatteryState.unknown:
+      case null:
+        return 'unknown';
+    }
   }
 
   Future<void> _onAddNewLocation() async {
@@ -1203,6 +1261,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Widget _buildLogScreen() {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
@@ -1226,19 +1285,22 @@ class _ScenarioPageState extends State<ScenarioPage> {
           ),
         if (_latestNearest != null)
           Card(
-            color: Colors.blue.shade50,
+            color: scheme.secondaryContainer,
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Text(
                 'Countdown to log ${_latestNearest!.site.name}: '
                 '${_minutesRemainingToLog(_latestNearest!.site).toStringAsFixed(1)} minutes remaining',
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSecondaryContainer,
+                ),
               ),
             ),
           ),
         if (_pendingSite != null)
           Card(
-            color: Colors.amber.shade50,
+            color: scheme.tertiaryContainer,
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -1246,10 +1308,16 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 children: <Widget>[
                   Text(
                     'Confirm job at ${_pendingSite!.address}?',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: scheme.onTertiaryContainer,
+                    ),
                   ),
                   const SizedBox(height: 6),
-                  Text('Auto-log in ${_promptCountdown}s if no response.'),
+                  Text(
+                    'Auto-log in ${_promptCountdown}s if no response.',
+                    style: TextStyle(color: scheme.onTertiaryContainer),
+                  ),
                   const SizedBox(height: 10),
                   Row(
                     children: <Widget>[
@@ -1313,9 +1381,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       child: Text('Delete'),
                     ),
                   ],
-                  child: Icon(
-                    log.autoLogged ? Icons.flag : Icons.check_circle,
-                    color: log.autoLogged ? Colors.orange : Colors.green,
+                  child: const Icon(
+                    Icons.delete,
+                    color: Colors.red,
                   ),
                 ),
               ),
@@ -1339,6 +1407,20 @@ class _ScenarioPageState extends State<ScenarioPage> {
         ),
         const SizedBox(height: 12),
         Card(
+          child: SwitchListTile(
+            title: const Text('Debug Mode'),
+            subtitle:
+                const Text('Enable extra debug behavior for troubleshooting.'),
+            value: _debugMode,
+            onChanged: (bool enabled) {
+              setState(() {
+                _debugMode = enabled;
+              });
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
@@ -1357,7 +1439,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       onPressed: _isTracking ? null : _startScenario,
                       icon: const Icon(Icons.play_arrow),
                       label: const Text('Start Tracking'),
+                        if (!enabled && _selectedTabIndex == 3) {
+                          _selectedTabIndex = 2;
+                        }
                     ),
+                      if (enabled) {
+                        unawaited(_refreshBatteryUsage());
+                      }
                     OutlinedButton.icon(
                       onPressed: _isTracking ? _stopScenario : null,
                       icon: const Icon(Icons.stop),
@@ -1400,6 +1488,42 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       label: const Text('App Permissions'),
                     ),
                   ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDebugScreen() {
+    final String levelText = _batteryLevel == null ? '--' : '$_batteryLevel%';
+    final String usedText = _batteryLevel == null ? '--' : '${100 - _batteryLevel!}%';
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Battery Usage',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text('Battery level: $levelText'),
+                const SizedBox(height: 4),
+                Text('Battery used: $usedText'),
+                const SizedBox(height: 4),
+                Text('Battery state: ${_batteryStateLabel(_batteryState)}'),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: _isLoadingBattery ? null : _refreshBatteryUsage,
+                  icon: const Icon(Icons.battery_full),
+                  label: Text(_isLoadingBattery ? 'Refreshing...' : 'Refresh Battery'),
                 ),
               ],
             ),
@@ -1483,6 +1607,30 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   @override
   Widget build(BuildContext context) {
+    final List<NavigationDestination> destinations = <NavigationDestination>[
+      const NavigationDestination(
+        icon: Icon(Icons.fact_check_outlined),
+        selectedIcon: Icon(Icons.fact_check),
+        label: 'Log',
+      ),
+      const NavigationDestination(
+        icon: Icon(Icons.place_outlined),
+        selectedIcon: Icon(Icons.place),
+        label: 'Locations',
+      ),
+      const NavigationDestination(
+        icon: Icon(Icons.settings_outlined),
+        selectedIcon: Icon(Icons.settings),
+        label: 'Settings',
+      ),
+      if (_debugMode)
+        const NavigationDestination(
+          icon: Icon(Icons.bug_report_outlined),
+          selectedIcon: Icon(Icons.bug_report),
+          label: 'Debug',
+        ),
+    ];
+
     return Scaffold(
       appBar: AppBar(title: Text(_appBarTitle)),
       body: IndexedStack(
@@ -1491,6 +1639,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
           _buildLogScreen(),
           _buildLocationsScreen(),
           _buildSettingsScreen(),
+          if (_debugMode) _buildDebugScreen(),
         ],
       ),
       floatingActionButton: _selectedTabIndex == 1
@@ -1507,23 +1656,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
             _selectedTabIndex = index;
           });
         },
-        destinations: const <NavigationDestination>[
-          NavigationDestination(
-            icon: Icon(Icons.fact_check_outlined),
-            selectedIcon: Icon(Icons.fact_check),
-            label: 'Log',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.place_outlined),
-            selectedIcon: Icon(Icons.place),
-            label: 'Locations',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
-          ),
-        ],
+        destinations: destinations,
       ),
     );
   }
