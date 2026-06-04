@@ -11,8 +11,21 @@ void main() {
   runApp(const LokaLogApp());
 }
 
-class LokaLogApp extends StatelessWidget {
+class LokaLogApp extends StatefulWidget {
   const LokaLogApp({super.key});
+
+  @override
+  State<LokaLogApp> createState() => _LokaLogAppState();
+}
+
+class _LokaLogAppState extends State<LokaLogApp> {
+  ThemeMode _themeMode = ThemeMode.light;
+
+  void _setDarkMode(bool enabled) {
+    setState(() {
+      _themeMode = enabled ? ThemeMode.dark : ThemeMode.light;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -23,26 +36,55 @@ class LokaLogApp extends StatelessWidget {
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0F766E)),
       ),
-      home: const ScenarioPage(),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0F766E),
+          brightness: Brightness.dark,
+        ),
+      ),
+      themeMode: _themeMode,
+      home: ScenarioPage(
+        isDarkMode: _themeMode == ThemeMode.dark,
+        onDarkModeChanged: _setDarkMode,
+      ),
     );
   }
 }
 
 class ScenarioPage extends StatefulWidget {
-  const ScenarioPage({super.key});
+  const ScenarioPage({
+    super.key,
+    required this.isDarkMode,
+    required this.onDarkModeChanged,
+  });
+
+  final bool isDarkMode;
+  final ValueChanged<bool> onDarkModeChanged;
 
   @override
   State<ScenarioPage> createState() => _ScenarioPageState();
 }
 
 class _ScenarioPageState extends State<ScenarioPage> {
-  static const MethodChannel _locationChannel = MethodChannel('lokalog/location');
+  static const MethodChannel _locationChannel =
+      MethodChannel('lokalog/location');
   static const int _trackingIntervalSeconds = 5;
   static const int _requiredStableSamples = 3;
   static const double _maxAccuracyMeters = 50;
   static const double _maxSpeedForDwell = 1.2;
   static const double _matchRadiusMeters = 100;
-  static const List<int> _logMinuteOptions = <int>[1, 5, 10, 15, 20, 30, 45, 60];
+  static const List<int> _logMinuteOptions = <int>[
+    1,
+    5,
+    10,
+    15,
+    20,
+    30,
+    45,
+    60
+  ];
   static const String _sitesStorageKey = 'saved_job_sites_v1';
 
   final List<JobSite> _sites = <JobSite>[];
@@ -54,7 +96,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   Timer? _promptTimer;
 
   LocationFix? _currentFix;
-  String _status = 'Tap Start Tracking on Logs to begin.';
+  String _status = 'Open Settings to start tracking.';
   int _stableSamples = 0;
   bool _isTracking = false;
   int _selectedTabIndex = 0;
@@ -108,7 +150,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _loadSites() async {
     try {
-      final String? raw = await _locationChannel.invokeMethod<String>('loadSites');
+      final String? raw =
+          await _locationChannel.invokeMethod<String>('loadSites');
 
       if (raw == null || raw.trim().isEmpty) {
         final List<JobSite> defaults = _defaultSites();
@@ -167,7 +210,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _loadBackgroundLogs() async {
     try {
-      final String? raw = await _locationChannel.invokeMethod<String>('loadBackgroundLogs');
+      final String? raw =
+          await _locationChannel.invokeMethod<String>('loadBackgroundLogs');
       if (raw == null || raw.trim().isEmpty) {
         return;
       }
@@ -180,31 +224,33 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final List<JobLog> loadedLogs = decoded
           .whereType<Map<String, dynamic>>()
           .map((Map<String, dynamic> item) {
-            return JobLog(
-              address: (item['address'] ?? '').toString(),
-              lat: ((item['lat'] as num?)?.toDouble() ?? 0),
-              lng: ((item['lng'] as num?)?.toDouble() ?? 0),
-              confidence: ((item['confidence'] as num?)?.toDouble() ?? 100),
-              confirmedByUser: (item['confirmedByUser'] as bool?) ?? false,
-              autoLogged: (item['autoLogged'] as bool?) ?? true,
-              timestamp: DateTime.fromMillisecondsSinceEpoch(
-                ((item['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch),
-              ),
-            );
-          })
-          .toList();
+        return JobLog(
+          address: (item['address'] ?? '').toString(),
+          lat: ((item['lat'] as num?)?.toDouble() ?? 0),
+          lng: ((item['lng'] as num?)?.toDouble() ?? 0),
+          confidence: ((item['confidence'] as num?)?.toDouble() ?? 100),
+          confirmedByUser: (item['confirmedByUser'] as bool?) ?? false,
+          autoLogged: (item['autoLogged'] as bool?) ?? true,
+          timestamp: DateTime.fromMillisecondsSinceEpoch(
+            ((item['timestamp'] as num?)?.toInt() ??
+                DateTime.now().millisecondsSinceEpoch),
+          ),
+        );
+      }).toList();
 
       if (!mounted || loadedLogs.isEmpty) {
         return;
       }
 
       final Set<String> existing = _logs
-          .map((JobLog log) => '${log.address}|${log.timestamp.millisecondsSinceEpoch}')
+          .map((JobLog log) =>
+              '${log.address}|${log.timestamp.millisecondsSinceEpoch}')
           .toSet();
 
       setState(() {
         for (final JobLog log in loadedLogs) {
-          final String key = '${log.address}|${log.timestamp.millisecondsSinceEpoch}';
+          final String key =
+              '${log.address}|${log.timestamp.millisecondsSinceEpoch}';
           if (existing.add(key)) {
             _logs.insert(0, log);
           }
@@ -279,8 +325,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     bool serviceEnabled = false;
     try {
-      serviceEnabled =
-          (await _locationChannel.invokeMethod<bool>('isLocationServiceEnabled')) ??
+      serviceEnabled = (await _locationChannel
+              .invokeMethod<bool>('isLocationServiceEnabled')) ??
           false;
     } on PlatformException {
       serviceEnabled = false;
@@ -290,30 +336,164 @@ class _ScenarioPageState extends State<ScenarioPage> {
       setState(() {
         _status = 'Location services are off. Turn on GPS and try again.';
       });
+      await _showGoToSettingsDialog(
+        title: 'Location Services Off',
+        message: 'GPS is turned off. Open Location settings now?',
+        openLocationSettings: true,
+      );
       return false;
     }
 
-    final bool granted =
-        (await _locationChannel.invokeMethod<bool>('checkAndRequestPermission')) ??
+    final bool granted = (await _locationChannel
+            .invokeMethod<bool>('checkAndRequestPermission')) ??
         false;
     if (!granted) {
       setState(() {
-        _status = 'Location permission denied. Allow location access to start tracking.';
+        _status =
+            'Location permission denied. Allow location access to start tracking.';
       });
+      await _showGoToSettingsDialog(
+        title: 'Location Permission Needed',
+        message:
+            'Location permission is required. Open app permission settings now?',
+        openLocationSettings: false,
+      );
       return false;
     }
 
-    final bool backgroundGranted =
-        (await _locationChannel.invokeMethod<bool>('hasBackgroundLocationPermission')) ??
+    final bool backgroundGranted = (await _locationChannel
+            .invokeMethod<bool>('hasBackgroundLocationPermission')) ??
         false;
     if (!backgroundGranted) {
       setState(() {
-        _status = 'For app-closed geofencing, set Location permission to "Allow all the time" in Android settings.';
+        _status =
+            'For app-closed geofencing, set Location permission to "Allow all the time" in Android settings.';
       });
+      await _showGoToSettingsDialog(
+        title: 'Background Location Needed',
+        message:
+            'To log when the app is closed, set Location to "Allow all the time". Open app settings now?',
+        openLocationSettings: false,
+      );
       return false;
     }
 
     return true;
+  }
+
+  Future<bool> _ensureForegroundLocationAccess() async {
+    if (!Platform.isAndroid) {
+      setState(() {
+        _status = 'Native GPS is implemented for Android in this build.';
+      });
+      return false;
+    }
+
+    bool serviceEnabled = false;
+    try {
+      serviceEnabled = (await _locationChannel
+              .invokeMethod<bool>('isLocationServiceEnabled')) ??
+          false;
+    } on PlatformException {
+      serviceEnabled = false;
+    }
+
+    if (!serviceEnabled) {
+      setState(() {
+        _status = 'Location services are off. Turn on GPS and try again.';
+      });
+      await _showGoToSettingsDialog(
+        title: 'Location Services Off',
+        message: 'GPS is turned off. Open Location settings now?',
+        openLocationSettings: true,
+      );
+      return false;
+    }
+
+    final bool granted = (await _locationChannel
+            .invokeMethod<bool>('checkAndRequestPermission')) ??
+        false;
+    if (!granted) {
+      setState(() {
+        _status =
+            'Location permission denied. Allow location access and try again.';
+      });
+      await _showGoToSettingsDialog(
+        title: 'Location Permission Needed',
+        message:
+            'Location permission is required. Open app permission settings now?',
+        openLocationSettings: false,
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _openLocationSettings() async {
+    try {
+      await _locationChannel.invokeMethod<bool>('openLocationSettings');
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open Location settings.')),
+      );
+    }
+  }
+
+  Future<void> _openAppSettings() async {
+    try {
+      await _locationChannel.invokeMethod<bool>('openAppSettings');
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open App settings.')),
+      );
+    }
+  }
+
+  Future<void> _showGoToSettingsDialog({
+    required String title,
+    required String message,
+    required bool openLocationSettings,
+  }) async {
+    if (!mounted) {
+      return;
+    }
+
+    final bool? shouldOpen = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Not now'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Open Settings'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldOpen != true) {
+      return;
+    }
+
+    if (openLocationSettings) {
+      await _openLocationSettings();
+    } else {
+      await _openAppSettings();
+    }
   }
 
   Future<void> _pollCurrentLocation() async {
@@ -322,10 +502,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
 
     try {
-      final Map<Object?, Object?>? position =
-          await _locationChannel.invokeMethod<Map<Object?, Object?>>(
-        'getCurrentLocation',
-      ).timeout(const Duration(seconds: 12));
+      final Map<Object?, Object?>? position = await _locationChannel
+          .invokeMethod<Map<Object?, Object?>>(
+            'getCurrentLocation',
+          )
+          .timeout(const Duration(seconds: 12));
 
       if (!_isTracking || !mounted) {
         return;
@@ -406,7 +587,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     if (_candidateSite != null && _pendingSite == null) {
       final double dwell = _dwellMinutes[_candidateSite!.address] ?? 0;
-      final bool alreadyLogged = _sessionLoggedAddresses.contains(_candidateSite!.address);
+      final bool alreadyLogged =
+          _sessionLoggedAddresses.contains(_candidateSite!.address);
 
       if (!alreadyLogged &&
           dwell >= _candidateSite!.requiredDwellMinutes.toDouble() &&
@@ -486,11 +668,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   double _confidenceScore(LocationFix fix, JobSite site) {
-    final double distance = _distanceMeters(fix.lat, fix.lng, site.lat, site.lng);
+    final double distance =
+        _distanceMeters(fix.lat, fix.lng, site.lat, site.lng);
     final double accuracyScore = (1 - (fix.accuracyMeters / 60)).clamp(0, 1);
     final double distanceScore = (1 - (distance / 120)).clamp(0, 1);
     final double speedScore = (1 - (fix.speedMetersPerSecond / 3)).clamp(0, 1);
-    return ((accuracyScore * 0.4) + (distanceScore * 0.4) + (speedScore * 0.2)) *
+    return ((accuracyScore * 0.4) +
+            (distanceScore * 0.4) +
+            (speedScore * 0.2)) *
         100;
   }
 
@@ -503,9 +688,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }) {
     final double dwell = _dwellMinutes[nearest.site.address] ?? 0;
     final double remaining = _minutesRemainingToLog(nearest.site);
-    final String accuracyLabel = goodAccuracy
-        ? 'good'
-        : 'poor (nearest estimate may drift)';
+    final String accuracyLabel =
+        goodAccuracy ? 'good' : 'poor (nearest estimate may drift)';
     return 'Nearest: ${nearest.site.address} | '
         'distance: ${nearest.distanceMeters.toStringAsFixed(1)}m | '
         'target: ${nearest.site.requiredDwellMinutes}m | '
@@ -513,8 +697,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
         'remaining: ${remaining.toStringAsFixed(1)}m | '
         'accuracy: $accuracyLabel | '
         'motion: ${lowSpeed ? 'stationary' : 'moving'} | '
-          'geofence: ${inGeofence ? 'inside' : 'outside'} '
-          '(${nearest.distanceMeters.toStringAsFixed(0)}/${effectiveRadius.toStringAsFixed(0)}m)';
+        'geofence: ${inGeofence ? 'inside' : 'outside'} '
+        '(${nearest.distanceMeters.toStringAsFixed(0)}/${effectiveRadius.toStringAsFixed(0)}m)';
   }
 
   Future<_GeocodePoint?> _lookupCoordinates(_AddLocationInput input) async {
@@ -565,6 +749,111 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
   }
 
+  Future<_ReverseGeocodeAddress?> _lookupAddressByCoordinates(
+    double lat,
+    double lng,
+  ) async {
+    final Uri uri = Uri.https(
+      'nominatim.openstreetmap.org',
+      '/reverse',
+      <String, String>{
+        'lat': lat.toString(),
+        'lon': lng.toString(),
+        'format': 'jsonv2',
+        'addressdetails': '1',
+      },
+    );
+
+    try {
+      final http.Response response = await http.get(
+        uri,
+        headers: <String, String>{
+          'User-Agent': 'lokalog-app/1.0 (mobile field logging demo)',
+          'Accept': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 12));
+
+      if (response.statusCode != 200) {
+        return null;
+      }
+
+      final dynamic decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+
+      final Map<String, dynamic> address =
+          (decoded['address'] as Map<String, dynamic>?) ?? <String, dynamic>{};
+      final String houseNumber =
+          (address['house_number'] ?? '').toString().trim();
+      final String road = (address['road'] ?? '').toString().trim();
+      final String street = <String>[houseNumber, road]
+          .where((String value) => value.isNotEmpty)
+          .join(' ');
+
+      final String city = (address['city'] ??
+              address['town'] ??
+              address['village'] ??
+              address['municipality'] ??
+              address['county'] ??
+              '')
+          .toString()
+          .trim();
+
+      String state =
+          (address['state_code'] ?? '').toString().trim().toUpperCase();
+      if (state.isEmpty) {
+        state = (address['state'] ?? '').toString().trim().toUpperCase();
+      }
+      if (state.length > 2) {
+        state = state.substring(0, 2);
+      }
+
+      final String zip = (address['postcode'] ?? '').toString().trim();
+
+      if (street.isEmpty || city.isEmpty || state.isEmpty || zip.isEmpty) {
+        return null;
+      }
+
+      return _ReverseGeocodeAddress(
+        street: street,
+        city: city,
+        state: state,
+        zip: zip,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<LocationFix?> _getCurrentLocationFix() async {
+    try {
+      final Map<Object?, Object?>? position = await _locationChannel
+          .invokeMethod<Map<Object?, Object?>>(
+            'getCurrentLocation',
+          )
+          .timeout(const Duration(seconds: 12));
+
+      final double? lat = (position?['latitude'] as num?)?.toDouble();
+      final double? lng = (position?['longitude'] as num?)?.toDouble();
+      if (lat == null || lng == null) {
+        return null;
+      }
+
+      return LocationFix(
+        lat: lat,
+        lng: lng,
+        accuracyMeters: ((position?['accuracy'] as num?)?.toDouble() ?? 999),
+        speedMetersPerSecond: max(
+          0,
+          ((position?['speed'] as num?)?.toDouble() ?? 0),
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   SiteDistance _findNearestSite(LocationFix fix, List<JobSite> sites) {
     JobSite nearest = sites.first;
     double best = _distanceMeters(fix.lat, fix.lng, nearest.lat, nearest.lng);
@@ -594,11 +883,18 @@ class _ScenarioPageState extends State<ScenarioPage> {
   double _toRadians(double deg) => deg * pi / 180;
 
   String get _appBarTitle {
-    return _selectedTabIndex == 0 ? 'LokaLog - Locations Log' : 'LokaLog - Locations';
+    if (_selectedTabIndex == 0) {
+      return 'LokaLog - Locations Log';
+    }
+    if (_selectedTabIndex == 1) {
+      return 'LokaLog - Locations';
+    }
+    return 'LokaLog - Settings';
   }
 
   Future<void> _onAddNewLocation() async {
-    final _AddLocationInput? result = await showModalBottomSheet<_AddLocationInput>(
+    final _AddLocationInput? result =
+        await showModalBottomSheet<_AddLocationInput>(
       context: context,
       isScrollControlled: true,
       builder: (BuildContext sheetContext) {
@@ -624,7 +920,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
         result.state.isEmpty ||
         result.zip.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill name, street, city, state, and ZIP.')),
+        const SnackBar(
+            content: Text('Please fill name, street, city, state, and ZIP.')),
       );
       return;
     }
@@ -642,7 +939,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (point == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Could not geocode address. Please verify and try again.'),
+          content:
+              Text('Could not geocode address. Please verify and try again.'),
         ),
       );
       return;
@@ -667,8 +965,106 @@ class _ScenarioPageState extends State<ScenarioPage> {
     unawaited(_saveSites());
   }
 
+  Future<void> _onAddCurrentLocation() async {
+    final bool hasAccess = await _ensureForegroundLocationAccess();
+    if (!hasAccess || !mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Reading current GPS coordinates...')),
+    );
+
+    final LocationFix? fix = await _getCurrentLocationFix();
+    if (!mounted) {
+      return;
+    }
+
+    if (fix == null) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Unable to read current GPS coordinates.')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Looking up address from coordinates...')),
+    );
+
+    final _ReverseGeocodeAddress? reverse = await _lookupAddressByCoordinates(
+      fix.lat,
+      fix.lng,
+    );
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    if (reverse == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not resolve address from current coordinates.'),
+        ),
+      );
+      return;
+    }
+
+    final _AddLocationInput? result =
+        await showModalBottomSheet<_AddLocationInput>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext sheetContext) {
+        return _AddLocationSheet(
+          title: 'Name This Current Location',
+          submitLabel: 'Save Location',
+          logMinuteOptions: _logMinuteOptions,
+          initialInput: _AddLocationInput(
+            name: '',
+            street: reverse.street,
+            city: reverse.city,
+            state: reverse.state,
+            zip: reverse.zip,
+            requiredMinutes: _logMinuteOptions.first,
+          ),
+        );
+      },
+    );
+
+    if (result == null || !mounted) {
+      return;
+    }
+
+    if (result.name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a location name.')),
+      );
+      return;
+    }
+
+    final JobSite newSite = JobSite(
+      name: result.name,
+      street: result.street,
+      city: result.city,
+      state: result.state,
+      zip: result.zip,
+      lat: fix.lat,
+      lng: fix.lng,
+      requiredDwellMinutes: result.requiredMinutes,
+    );
+
+    setState(() {
+      _sites.add(newSite);
+      _status =
+          'Added current location: ${newSite.name} at ${newSite.address} (${result.requiredMinutes}m).';
+    });
+    unawaited(_saveSites());
+  }
+
   Future<void> _onEditLocation(int index, JobSite site) async {
-    final _AddLocationInput? result = await showModalBottomSheet<_AddLocationInput>(
+    final _AddLocationInput? result =
+        await showModalBottomSheet<_AddLocationInput>(
       context: context,
       isScrollControlled: true,
       builder: (BuildContext sheetContext) {
@@ -698,7 +1094,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
         result.state.isEmpty ||
         result.zip.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill name, street, city, state, and ZIP.')),
+        const SnackBar(
+            content: Text('Please fill name, street, city, state, and ZIP.')),
       );
       return;
     }
@@ -716,7 +1113,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (point == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Could not geocode address. Please verify and try again.'),
+          content:
+              Text('Could not geocode address. Please verify and try again.'),
         ),
       );
       return;
@@ -735,7 +1133,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     setState(() {
       _sites[index] = updatedSite;
-      _status = 'Updated location: ${updatedSite.name} at ${updatedSite.address} (${result.requiredMinutes}m).';
+      _status =
+          'Updated location: ${updatedSite.name} at ${updatedSite.address} (${result.requiredMinutes}m).';
     });
     unawaited(_saveSites());
   }
@@ -772,27 +1171,41 @@ class _ScenarioPageState extends State<ScenarioPage> {
     unawaited(_saveSites());
   }
 
+  Future<void> _onDeleteLogEntry(int index, JobLog log) async {
+    final bool? confirmDelete = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Log Entry'),
+          content: Text('Delete log for ${log.address}?'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmDelete != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _logs.removeAt(index);
+      _status = 'Deleted one log entry.';
+    });
+  }
+
   Widget _buildLogScreen() {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: <Widget>[
-            FilledButton.icon(
-              onPressed: _isTracking ? null : _startScenario,
-              icon: const Icon(Icons.play_arrow),
-              label: const Text('Start Tracking'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _isTracking ? _stopScenario : null,
-              icon: const Icon(Icons.stop),
-              label: const Text('Stop'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -874,7 +1287,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
         if (_logs.isEmpty)
           const Text('No locations logged yet.')
         else
-          ..._logs.map((JobLog log) {
+          ..._logs.asMap().entries.map((MapEntry<int, JobLog> entry) {
+            final int index = entry.key;
+            final JobLog log = entry.value;
             return Card(
               child: ListTile(
                 title: Text(log.address),
@@ -885,12 +1300,111 @@ class _ScenarioPageState extends State<ScenarioPage> {
                   '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}',
                 ),
                 isThreeLine: true,
-                trailing: log.autoLogged
-                    ? const Icon(Icons.flag, color: Colors.orange)
-                    : const Icon(Icons.check_circle, color: Colors.green),
+                trailing: PopupMenuButton<String>(
+                  onSelected: (String action) {
+                    if (action == 'delete') {
+                      _onDeleteLogEntry(index, log);
+                    }
+                  },
+                  itemBuilder: (BuildContext context) =>
+                      const <PopupMenuEntry<String>>[
+                    PopupMenuItem<String>(
+                      value: 'delete',
+                      child: Text('Delete'),
+                    ),
+                  ],
+                  child: Icon(
+                    log.autoLogged ? Icons.flag : Icons.check_circle,
+                    color: log.autoLogged ? Colors.orange : Colors.green,
+                  ),
+                ),
               ),
             );
           }),
+      ],
+    );
+  }
+
+  Widget _buildSettingsScreen() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: <Widget>[
+        Card(
+          child: SwitchListTile(
+            title: const Text('Dark Theme'),
+            subtitle: const Text('Toggle between light and dark mode.'),
+            value: widget.isDarkMode,
+            onChanged: widget.onDarkModeChanged,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Tracking Controls',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    FilledButton.icon(
+                      onPressed: _isTracking ? null : _startScenario,
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('Start Tracking'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _isTracking ? _stopScenario : null,
+                      icon: const Icon(Icons.stop),
+                      label: const Text('Stop Tracking'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(_isTracking
+                    ? 'Tracking is active.'
+                    : 'Tracking is stopped.'),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Permission Shortcuts',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    OutlinedButton.icon(
+                      onPressed: _openLocationSettings,
+                      icon: const Icon(Icons.gps_fixed),
+                      label: const Text('Location Settings'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _openAppSettings,
+                      icon: const Icon(Icons.admin_panel_settings_outlined),
+                      label: const Text('App Permissions'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -902,6 +1416,27 @@ class _ScenarioPageState extends State<ScenarioPage> {
         const Text(
           'Locations',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Add From Current Position',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed: _onAddCurrentLocation,
+                  icon: const Icon(Icons.my_location),
+                  label: const Text('Use Current Location'),
+                ),
+              ],
+            ),
+          ),
         ),
         const SizedBox(height: 8),
         if (_sites.isEmpty)
@@ -927,7 +1462,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       _onDeleteLocation(entry.key, site);
                     }
                   },
-                  itemBuilder: (BuildContext context) => const <PopupMenuEntry<String>>[
+                  itemBuilder: (BuildContext context) =>
+                      const <PopupMenuEntry<String>>[
                     PopupMenuItem<String>(
                       value: 'edit',
                       child: Text('Edit'),
@@ -954,6 +1490,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         children: <Widget>[
           _buildLogScreen(),
           _buildLocationsScreen(),
+          _buildSettingsScreen(),
         ],
       ),
       floatingActionButton: _selectedTabIndex == 1
@@ -980,6 +1517,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
             icon: Icon(Icons.place_outlined),
             selectedIcon: Icon(Icons.place),
             label: 'Locations',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings),
+            label: 'Settings',
           ),
         ],
       ),
@@ -1103,6 +1645,20 @@ class _GeocodePoint {
   final double lng;
 }
 
+class _ReverseGeocodeAddress {
+  _ReverseGeocodeAddress({
+    required this.street,
+    required this.city,
+    required this.state,
+    required this.zip,
+  });
+
+  final String street;
+  final String city;
+  final String state;
+  final String zip;
+}
+
 class _AddLocationSheet extends StatefulWidget {
   const _AddLocationSheet({
     required this.title,
@@ -1189,7 +1745,8 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                 children: <Widget>[
                   Text(
                     widget.title,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
