@@ -102,6 +102,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   static const double _maxAccuracyMeters = 50;
   static const double _maxSpeedForDwell = 1.2;
   static const double _matchRadiusMeters = 100;
+  static const double _outsideMinutesForRelog = 10;
   static const List<int> _logMinuteOptions = <int>[
     1,
     5,
@@ -118,6 +119,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   final List<JobLog> _logs = <JobLog>[];
   final Set<String> _sessionLoggedAddresses = <String>{};
   final Map<String, double> _dwellMinutes = <String, double>{};
+  final Map<String, double> _outsideMinutes = <String, double>{};
+  final Map<String, bool> _relogEligible = <String, bool>{};
 
   Timer? _trackingTimer;
   Timer? _promptTimer;
@@ -341,6 +344,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     _sessionLoggedAddresses.clear();
     _dwellMinutes.clear();
+    _outsideMinutes.clear();
+    _relogEligible.clear();
     _stableSamples = 0;
     _candidateSite = null;
     _pendingSite = null;
@@ -622,10 +627,29 @@ class _ScenarioPageState extends State<ScenarioPage> {
     );
     final bool inGeofence = nearest.distanceMeters <= effectiveRadius;
 
+    final double increment = elapsedMinutes.clamp(0, 3);
+    for (final JobSite site in _sites) {
+      final double distanceToSite = _distanceMeters(
+        fix.lat,
+        fix.lng,
+        site.lat,
+        site.lng,
+      );
+      final String key = site.address;
+      if (distanceToSite > effectiveRadius) {
+        final double outside = (_outsideMinutes[key] ?? 0) + increment;
+        _outsideMinutes[key] = outside;
+        if (outside >= _outsideMinutesForRelog) {
+          _relogEligible[key] = true;
+        }
+      } else {
+        _outsideMinutes[key] = 0;
+      }
+    }
+
     if (inGeofence) {
       _stableSamples += 1;
       _candidateSite = nearest.site;
-      final double increment = elapsedMinutes.clamp(0, 3);
       _dwellMinutes[nearest.site.address] =
           (_dwellMinutes[nearest.site.address] ?? 0) + increment;
     } else {
@@ -637,8 +661,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final double dwell = _dwellMinutes[_candidateSite!.address] ?? 0;
       final bool alreadyLogged =
           _sessionLoggedAddresses.contains(_candidateSite!.address);
+      final bool relogAllowed =
+          _relogEligible[_candidateSite!.address] ?? false;
 
-      if (!alreadyLogged &&
+      if ((!alreadyLogged || relogAllowed) &&
           dwell >= _candidateSite!.requiredDwellMinutes.toDouble() &&
           _stableSamples >= _requiredStableSamples) {
         _showConfirmationPrompt(_candidateSite!);
@@ -707,6 +733,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     setState(() {
       _sessionLoggedAddresses.add(site.address);
+      _relogEligible[site.address] = false;
+      _outsideMinutes[site.address] = 0;
       _pendingSite = null;
       _promptCountdown = 0;
       _status = autoLogged
