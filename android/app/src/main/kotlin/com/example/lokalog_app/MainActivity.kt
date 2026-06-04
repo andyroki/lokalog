@@ -1,8 +1,10 @@
 package com.example.lokalog_app
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.BatteryManager
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
@@ -29,6 +31,14 @@ class MainActivity : FlutterActivity() {
 		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
 			.setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
 				when (call.method) {
+					"getBatteryLevel" -> {
+						result.success(getBatteryLevel())
+					}
+
+					"getBatteryState" -> {
+						result.success(getBatteryState())
+					}
+
 					"isLocationServiceEnabled" -> {
 						result.success(isLocationServiceEnabled())
 					}
@@ -61,7 +71,17 @@ class MainActivity : FlutterActivity() {
 						result.success(null)
 					}
 
-					"loadBackgroundLogs" -> {
+"loadPreference" -> {
+					val key = call.argument<String>("key")
+					if (key == null) {
+						result.error("INVALID_ARGUMENT", "Missing key", null)
+						return@setMethodCallHandler
+					}
+					val prefs = getSharedPreferences("lokalog_store", MODE_PRIVATE)
+					result.success(prefs.getString(key, null))
+				}
+
+				"loadBackgroundLogs" -> {
 						result.success(GeofenceBackground.loadBackgroundLogsJson(this))
 					}
 
@@ -80,6 +100,23 @@ class MainActivity : FlutterActivity() {
 					else -> result.notImplemented()
 				}
 			}
+	}
+
+	private fun getBatteryLevel(): Int {
+		val manager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+		return manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+	}
+
+	private fun getBatteryState(): String {
+		val intent = registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+		val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+		return when (status) {
+			BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
+			BatteryManager.BATTERY_STATUS_DISCHARGING -> "discharging"
+			BatteryManager.BATTERY_STATUS_FULL -> "full"
+			BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "not_charging"
+			else -> "unknown"
+		}
 	}
 
 	private fun openLocationSettings(result: MethodChannel.Result) {
