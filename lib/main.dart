@@ -97,12 +97,14 @@ class ScenarioPage extends StatefulWidget {
 class _ScenarioPageState extends State<ScenarioPage> {
   static const MethodChannel _locationChannel =
       MethodChannel('lokalog/location');
-  static const int _trackingIntervalSeconds = 5;
   static const int _requiredStableSamples = 3;
   static const double _maxAccuracyMeters = 50;
   static const double _maxSpeedForDwell = 1.2;
   static const double _matchRadiusMeters = 100;
   static const double _outsideMinutesForRelog = 10;
+  static const List<int> _gpsPollSecondOptions = <int>[30, 60, 300];
+  static const List<int> _legacyGpsPollMinuteOptions = <int>[1, 5];
+  static const String _gpsPollPreferenceKey = 'pref_gps_poll_minutes';
   static const List<int> _logMinuteOptions = <int>[
     1,
     5,
@@ -130,6 +132,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   int _stableSamples = 0;
   bool _isTracking = false;
   bool _debugMode = false;
+  int _gpsPollIntervalSeconds = 60;
   int _selectedTabIndex = 0;
   int? _batteryLevel;
   String? _batteryState;
@@ -146,6 +149,70 @@ class _ScenarioPageState extends State<ScenarioPage> {
     super.initState();
     unawaited(_loadSites());
     unawaited(_loadDebugMode());
+    unawaited(_loadGpsPollInterval());
+  }
+
+  Future<void> _loadGpsPollInterval() async {
+    try {
+      final String? value = await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _gpsPollPreferenceKey},
+      );
+      final int? rawValue = int.tryParse(value ?? '');
+      int? seconds;
+      if (rawValue != null) {
+        if (_gpsPollSecondOptions.contains(rawValue)) {
+          seconds = rawValue;
+        } else if (_legacyGpsPollMinuteOptions.contains(rawValue)) {
+          seconds = rawValue * 60;
+        }
+      }
+      if (seconds != null && mounted) {
+        setState(() {
+          _gpsPollIntervalSeconds = seconds!;
+        });
+      }
+    } catch (_) {
+      // Use default if load fails.
+    }
+  }
+
+  String _gpsPollLabel(int seconds) {
+    if (seconds < 60) {
+      return '$seconds sec';
+    }
+    return '${seconds ~/ 60} min';
+  }
+
+  void _setGpsPollIntervalSeconds(int seconds) {
+    if (_gpsPollIntervalSeconds == seconds) {
+      return;
+    }
+    setState(() {
+      _gpsPollIntervalSeconds = seconds;
+      if (_isTracking) {
+        _status = 'GPS poll interval set to ${_gpsPollLabel(seconds)}.';
+      }
+    });
+
+    unawaited(_locationChannel.invokeMethod<void>(
+      'saveSites',
+      <String, dynamic>{
+        'key': _gpsPollPreferenceKey,
+        'value': seconds.toString(),
+      },
+    ));
+
+    if (_isTracking) {
+      _trackingTimer?.cancel();
+      _trackingTimer = Timer.periodic(
+        Duration(seconds: _gpsPollIntervalSeconds),
+        (_) {
+          _pollCurrentLocation();
+        },
+      );
+      unawaited(_pollCurrentLocation());
+    }
   }
 
   Future<void> _loadDebugMode() async {
@@ -358,7 +425,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     _trackingTimer?.cancel();
     _trackingTimer = Timer.periodic(
-      const Duration(seconds: _trackingIntervalSeconds),
+      Duration(seconds: _gpsPollIntervalSeconds),
       (_) {
         _pollCurrentLocation();
       },
@@ -1374,11 +1441,144 @@ class _ScenarioPageState extends State<ScenarioPage> {
     });
   }
 
+  Widget _buildPageFrame(List<Widget> children) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: isDark
+              ? const <Color>[Color(0xFF091411), Color(0xFF0F1F1C)]
+              : const <Color>[Color(0xFFF5F1EA), Color(0xFFE9F2EC)],
+        ),
+      ),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
+        children: children,
+      ),
+    );
+  }
+
+  Widget _buildHeroCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    Widget? action,
+  }) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? <Color>[
+                  scheme.primary.withValues(alpha: 0.38),
+                  scheme.secondary.withValues(alpha: 0.2),
+                ]
+              : <Color>[
+                  scheme.primaryContainer,
+                  scheme.secondaryContainer,
+                ],
+        ),
+      ),
+      child: Row(
+        children: <Widget>[
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: scheme.onPrimaryContainer.withValues(alpha: 0.14),
+            child: Icon(icon, color: scheme.onPrimaryContainer),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    color: scheme.onPrimaryContainer,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(color: scheme.onPrimaryContainer),
+                ),
+              ],
+            ),
+          ),
+          if (action != null) action,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title, IconData icon) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 10, 4, 10),
+      child: Row(
+        children: <Widget>[
+          Icon(icon, size: 18, color: scheme.primary),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricChip(String label, String value) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        '$label: $value',
+        style: TextStyle(
+          fontWeight: FontWeight.w700,
+          color: scheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
   Widget _buildLogScreen() {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
+    return _buildPageFrame(
+      <Widget>[
+        _buildHeroCard(
+          title: _isTracking ? 'Tracking in progress' : 'Ready to track',
+          subtitle: _status,
+          icon: _isTracking ? Icons.radar : Icons.route,
+          action: FilledButton(
+            onPressed: _isTracking ? _stopScenario : _startScenario,
+            child: Text(_isTracking ? 'Stop' : 'Start'),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: <Widget>[
+            _buildMetricChip('Locations', '${_sites.length}'),
+            _buildMetricChip('Logs', '${_logs.length}'),
+            _buildMetricChip('Mode', _isTracking ? 'Active' : 'Idle'),
+          ],
+        ),
+        _buildSectionTitle('Live Status', Icons.sensors),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -1461,13 +1661,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
             ),
           ),
         const SizedBox(height: 16),
-        const Text(
-          'Locations Log',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
+        _buildSectionTitle('Locations Log', Icons.fact_check_outlined),
         if (_logs.isEmpty)
-          const Text('No locations logged yet.')
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'No locations logged yet. Start tracking and stay near a site to create your first entry.',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ),
+          )
         else
           ..._logs.asMap().entries.map((MapEntry<int, JobLog> entry) {
             final int index = entry.key;
@@ -1507,9 +1711,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Widget _buildSettingsScreen() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
+    return _buildPageFrame(
+      <Widget>[
+        _buildHeroCard(
+          title: 'Preferences',
+          subtitle: 'Fine-tune appearance and tracking behavior.',
+          icon: Icons.tune,
+        ),
+        _buildSectionTitle('Appearance', Icons.palette_outlined),
         Card(
           child: SwitchListTile(
             title: const Text('Dark Theme'),
@@ -1518,7 +1727,53 @@ class _ScenarioPageState extends State<ScenarioPage> {
             onChanged: widget.onDarkModeChanged,
           ),
         ),
-        const SizedBox(height: 12),
+        _buildSectionTitle('Developer Tools', Icons.bug_report_outlined),
+        _buildSectionTitle('GPS Polling', Icons.gps_fixed),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'How Often To Poll GPS',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<int>(
+                  segments: const <ButtonSegment<int>>[
+                    ButtonSegment<int>(
+                      value: 30,
+                      label: Text('30 sec'),
+                      icon: Icon(Icons.bolt),
+                    ),
+                    ButtonSegment<int>(
+                      value: 60,
+                      label: Text('1 min'),
+                      icon: Icon(Icons.timer_outlined),
+                    ),
+                    ButtonSegment<int>(
+                      value: 300,
+                      label: Text('5 min'),
+                      icon: Icon(Icons.timer_rounded),
+                    ),
+                  ],
+                  selected: <int>{_gpsPollIntervalSeconds},
+                  onSelectionChanged: (Set<int> selected) {
+                    if (selected.isEmpty) {
+                      return;
+                    }
+                    _setGpsPollIntervalSeconds(selected.first);
+                  },
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Current interval: every ${_gpsPollLabel(_gpsPollIntervalSeconds)}.',
+                ),
+              ],
+            ),
+          ),
+        ),
         Card(
           child: SwitchListTile(
             title: const Text('Debug Mode'),
@@ -1545,7 +1800,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
             },
           ),
         ),
-        const SizedBox(height: 12),
+        _buildSectionTitle('Tracking Controls', Icons.play_circle_outline),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -1581,7 +1836,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
             ),
           ),
         ),
-        const SizedBox(height: 12),
+        _buildSectionTitle('Permission Shortcuts', Icons.key_outlined),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -1621,111 +1876,118 @@ class _ScenarioPageState extends State<ScenarioPage> {
     final String levelText = _batteryLevel == null ? '--' : '$_batteryLevel%';
     final String usedText =
         _batteryLevel == null ? '--' : '${100 - _batteryLevel!}%';
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'Battery Usage',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+    return _buildPageFrame(<Widget>[
+      _buildHeroCard(
+        title: 'Diagnostics',
+        subtitle: 'Quick battery telemetry for field testing.',
+        icon: Icons.bug_report,
+      ),
+      _buildSectionTitle('Battery Usage', Icons.battery_4_bar),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const SizedBox(height: 8),
+              Text('Battery level: $levelText'),
+              const SizedBox(height: 4),
+              Text('Battery used: $usedText'),
+              const SizedBox(height: 4),
+              Text('Battery state: ${_batteryState ?? 'unknown'}'),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: _isLoadingBattery ? null : _refreshBatteryUsage,
+                icon: const Icon(Icons.battery_full),
+                label: Text(
+                  _isLoadingBattery ? 'Refreshing...' : 'Refresh Battery',
                 ),
-                const SizedBox(height: 8),
-                Text('Battery level: $levelText'),
-                const SizedBox(height: 4),
-                Text('Battery used: $usedText'),
-                const SizedBox(height: 4),
-                Text('Battery state: ${_batteryState ?? 'unknown'}'),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: _isLoadingBattery ? null : _refreshBatteryUsage,
-                  icon: const Icon(Icons.battery_full),
-                  label: Text(
-                    _isLoadingBattery ? 'Refreshing...' : 'Refresh Battery',
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
-      ],
-    );
+      ),
+    ]);
   }
 
   Widget _buildLocationsScreen() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
-        const Text(
-          'Locations',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+    return _buildPageFrame(<Widget>[
+      _buildHeroCard(
+        title: 'Saved Locations',
+        subtitle: 'Add up to 5 sites. Each site logs after its dwell time.',
+        icon: Icons.place,
+        action: FilledButton.icon(
+          onPressed: _onAddNewLocation,
+          icon: const Icon(Icons.add_location_alt),
+          label: const Text('Add New'),
         ),
-        const SizedBox(height: 8),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'Add From Current Position',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 8),
-                FilledButton.icon(
-                  onPressed: _onAddCurrentLocation,
-                  icon: const Icon(Icons.my_location),
-                  label: const Text('Use Current Location'),
-                ),
-              ],
-            ),
+      ),
+      _buildSectionTitle('Quick Add', Icons.my_location_outlined),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const Text(
+                'Add From Current Position',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              FilledButton.icon(
+                onPressed: _onAddCurrentLocation,
+                icon: const Icon(Icons.my_location),
+                label: const Text('Use Current Location'),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 8),
-        if (_sites.isEmpty)
-          const Text('No locations added yet.')
-        else
-          ..._sites.asMap().entries.map((MapEntry<int, JobSite> entry) {
-            final JobSite site = entry.value;
-            return Card(
-              child: ListTile(
-                leading: CircleAvatar(child: Text('${entry.key + 1}')),
-                title: Text(site.name),
-                subtitle: Text(
-                  '${site.address}\n'
-                  'Lat: ${site.lat.toStringAsFixed(5)}, Lng: ${site.lng.toStringAsFixed(5)}\n'
-                  'Log after: ${site.requiredDwellMinutes} minutes',
-                ),
-                isThreeLine: true,
-                trailing: PopupMenuButton<String>(
-                  onSelected: (String action) {
-                    if (action == 'edit') {
-                      _onEditLocation(entry.key, site);
-                    } else if (action == 'delete') {
-                      _onDeleteLocation(entry.key, site);
-                    }
-                  },
-                  itemBuilder: (BuildContext context) =>
-                      const <PopupMenuEntry<String>>[
-                    PopupMenuItem<String>(
-                      value: 'edit',
-                      child: Text('Edit'),
-                    ),
-                    PopupMenuItem<String>(
-                      value: 'delete',
-                      child: Text('Delete'),
-                    ),
-                  ],
-                ),
+      ),
+      _buildSectionTitle('Location List', Icons.list_alt_outlined),
+      if (_sites.isEmpty)
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('No locations added yet.'),
+          ),
+        )
+      else
+        ..._sites.asMap().entries.map((MapEntry<int, JobSite> entry) {
+          final JobSite site = entry.value;
+          return Card(
+            child: ListTile(
+              leading: CircleAvatar(child: Text('${entry.key + 1}')),
+              title: Text(site.name),
+              subtitle: Text(
+                '${site.address}\n'
+                'Lat: ${site.lat.toStringAsFixed(5)}, Lng: ${site.lng.toStringAsFixed(5)}\n'
+                'Log after: ${site.requiredDwellMinutes} minutes',
               ),
-            );
-          }),
-      ],
-    );
+              isThreeLine: true,
+              trailing: PopupMenuButton<String>(
+                onSelected: (String action) {
+                  if (action == 'edit') {
+                    _onEditLocation(entry.key, site);
+                  } else if (action == 'delete') {
+                    _onDeleteLocation(entry.key, site);
+                  }
+                },
+                itemBuilder: (BuildContext context) =>
+                    const <PopupMenuEntry<String>>[
+                  PopupMenuItem<String>(
+                    value: 'edit',
+                    child: Text('Edit'),
+                  ),
+                  PopupMenuItem<String>(
+                    value: 'delete',
+                    child: Text('Delete'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+    ]);
   }
 
   @override
@@ -1755,7 +2017,16 @@ class _ScenarioPageState extends State<ScenarioPage> {
     ];
 
     return Scaffold(
-      appBar: AppBar(title: Text(_appBarTitle)),
+      extendBodyBehindAppBar: false,
+      appBar: AppBar(
+        title: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          child: Text(
+            _appBarTitle,
+            key: ValueKey<String>(_appBarTitle),
+          ),
+        ),
+      ),
       body: IndexedStack(
         index: _selectedTabIndex,
         children: <Widget>[
@@ -1765,13 +2036,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
           if (_debugMode) _buildDebugScreen(),
         ],
       ),
-      floatingActionButton: _selectedTabIndex == 1
-          ? FloatingActionButton.extended(
-              onPressed: _onAddNewLocation,
-              icon: const Icon(Icons.add_location_alt),
-              label: const Text('Add New'),
-            )
-          : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedTabIndex,
         onDestinationSelected: (int index) {
