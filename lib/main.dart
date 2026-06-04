@@ -313,13 +313,33 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _openUsageAccessSettings() async {
     try {
-      await _locationChannel.invokeMethod<bool>('openUsageAccessSettings');
+      final bool opened = await _locationChannel
+              .invokeMethod<bool>('openUsageAccessSettings') ??
+          false;
+      if (opened) {
+        return;
+      }
+      await _locationChannel.invokeMethod<bool>('openAppSettings');
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Usage Access settings unavailable on this device. Opened app settings instead.',
+          ),
+        ),
+      );
     } catch (_) {
       if (!mounted) {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open Usage Access settings.')),
+        const SnackBar(
+          content: Text(
+            'Could not open settings automatically. Please open Usage Access manually in Android settings.',
+          ),
+        ),
       );
     }
   }
@@ -844,6 +864,29 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   double _toRadians(double deg) => deg * pi / 180;
 
+  String _formatLogTimestamp(DateTime value) {
+    const List<String> monthNames = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final DateTime local = value.toLocal();
+    final int hour12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final String minute = local.minute.toString().padLeft(2, '0');
+    final String meridiem = local.hour >= 12 ? 'PM' : 'AM';
+    return '${monthNames[local.month - 1]} ${local.day}, ${local.year} at '
+        '$hour12:$minute $meridiem';
+  }
+
   String get _appBarSectionTitle {
     if (_selectedTabIndex == 0) {
       return 'Location Log';
@@ -1175,8 +1218,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
               child: ListTile(
                 title: Text(log.address),
                 subtitle: Text(
-                  '${log.timestamp.toIso8601String()}\n'
-                  'Lat/Lng: ${log.lat.toStringAsFixed(5)}, ${log.lng.toStringAsFixed(5)}\n'
+                  '${_formatLogTimestamp(log.timestamp)}\n'
                   'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
                   '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}',
                 ),

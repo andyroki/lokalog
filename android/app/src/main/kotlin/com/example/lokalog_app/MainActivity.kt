@@ -125,37 +125,31 @@ class MainActivity : FlutterActivity() {
 
 	private fun openUsageAccessSettings(result: MethodChannel.Result) {
 		try {
-			val usageIntent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
-				addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-			}
-			if (usageIntent.resolveActivity(packageManager) != null) {
-				startActivity(usageIntent)
-				result.success(true)
-				return
+			val intents = listOf(
+				Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS),
+				Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
+					data = Uri.parse("package:$packageName")
+				},
+				Intent(Settings.ACTION_SECURITY_SETTINGS),
+				Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS),
+				Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+					data = Uri.parse("package:$packageName")
+				}
+			)
+
+			for (intent in intents) {
+				intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+				if (intent.resolveActivity(packageManager) != null) {
+					startActivity(intent)
+					result.success(true)
+					return
+				}
 			}
 
-			val manageAppsIntent = Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS).apply {
-				addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-			}
-			if (manageAppsIntent.resolveActivity(packageManager) != null) {
-				startActivity(manageAppsIntent)
-				result.success(true)
-				return
-			}
-
-			val appDetailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-				data = Uri.parse("package:$packageName")
-				addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-			}
-			if (appDetailsIntent.resolveActivity(packageManager) != null) {
-				startActivity(appDetailsIntent)
-				result.success(true)
-				return
-			}
-
-			result.error("OPEN_SETTINGS_FAILED", "No compatible settings activity found", null)
+			result.success(false)
 		} catch (error: Exception) {
-			result.error("OPEN_SETTINGS_FAILED", error.message, null)
+			Log.w("LokaLog", "Failed to open Usage Access settings", error)
+			result.success(false)
 		}
 	}
 
