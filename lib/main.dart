@@ -1046,20 +1046,36 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   double _toRadians(double deg) => deg * pi / 180;
 
-  String get _appBarTitle {
+  String get _appBarSectionTitle {
     if (_selectedTabIndex == 0) {
-      return 'LokaLog - Locations Log';
+      return 'Location Log';
     }
     if (_selectedTabIndex == 1) {
-      return 'LokaLog - Locations';
+      return 'Saved Locations';
     }
     if (_selectedTabIndex == 2) {
-      return 'LokaLog - Settings';
+      return 'Settings';
     }
     if (_selectedTabIndex == 3) {
-      return 'LokaLog - Debug';
+      return 'Debug Tools';
     }
-    return 'LokaLog - Settings';
+    return 'Settings';
+  }
+
+  IconData get _appBarSectionIcon {
+    if (_selectedTabIndex == 0) {
+      return Icons.fact_check;
+    }
+    if (_selectedTabIndex == 1) {
+      return Icons.place;
+    }
+    if (_selectedTabIndex == 2) {
+      return Icons.settings;
+    }
+    if (_selectedTabIndex == 3) {
+      return Icons.bug_report;
+    }
+    return Icons.settings;
   }
 
   Future<void> _refreshBatteryUsage() async {
@@ -2019,11 +2035,46 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return Scaffold(
       extendBodyBehindAppBar: false,
       appBar: AppBar(
+        toolbarHeight: 68,
         title: AnimatedSwitcher(
           duration: const Duration(milliseconds: 220),
-          child: Text(
-            _appBarTitle,
-            key: ValueKey<String>(_appBarTitle),
+          child: Row(
+            key: ValueKey<int>(_selectedTabIndex),
+            children: <Widget>[
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  _appBarSectionIcon,
+                  size: 20,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'LokaLog',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.2,
+                        ),
+                  ),
+                  Text(
+                    _appBarSectionTitle,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       ),
