@@ -63,7 +63,7 @@ class _LokaLogAppState extends State<LokaLogApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'LokaLog Job Confirmation Demo',
+      title: 'Lokalog',
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0F766E)),

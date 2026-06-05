@@ -1,11 +1,11 @@
 {
-    "name": "lokalog_app",
-    "short_name": "lokalog_app",
+    "name": "Lokalog",
+    "short_name": "Lokalog",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Lokalog",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

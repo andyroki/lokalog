@@ -9,7 +9,7 @@
         tools:ignore="ProtectedPermissions" />
 
     <application
-        android:label="lokalog_app"
+        android:label="Lokalog"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
