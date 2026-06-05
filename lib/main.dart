@@ -934,6 +934,34 @@ class _ScenarioPageState extends State<ScenarioPage> {
     });
   }
 
+  void _refreshNearestUiFromCurrentFix() {
+    final LocationFix? fix = _currentFix;
+    if (!mounted || fix == null || _sites.isEmpty) {
+      return;
+    }
+
+    final SiteDistance nearest = _findNearestSite(fix, _sites);
+    final bool goodAccuracy = fix.accuracyMeters <= _maxAccuracyMeters;
+    final bool lowSpeed = fix.speedMetersPerSecond <= _maxSpeedForDwell;
+    final double effectiveRadius = max(
+      _matchRadiusMeters,
+      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+    );
+    final bool inGeofence = nearest.distanceMeters <= effectiveRadius;
+
+    setState(() {
+      _latestNearest = nearest;
+      _status = _buildStatusText(
+        nearest: nearest,
+        goodAccuracy: goodAccuracy,
+        lowSpeed: lowSpeed,
+        inGeofence: inGeofence,
+        effectiveRadius: effectiveRadius,
+        hideNearestDetails: _shouldHideNearestInfo(nearest),
+      );
+    });
+  }
+
   void _processFix(LocationFix fix) {
     final DateTime now = DateTime.now();
     final double elapsedMinutes;
@@ -2097,8 +2125,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
                     });
                     unawaited(_savePollingPreferences());
                     if (_isTracking) {
-                      _scheduleNextPoll();
+                      _scheduleNextPoll(immediate: true);
                     }
+                    _refreshNearestUiFromCurrentFix();
                   },
                 ),
                 const SizedBox(height: 10),
@@ -2125,8 +2154,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
                     });
                     unawaited(_savePollingPreferences());
                     if (_isTracking) {
-                      _scheduleNextPoll();
+                      _scheduleNextPoll(immediate: true);
                     }
+                    _refreshNearestUiFromCurrentFix();
                   },
                 ),
                 const SizedBox(height: 10),
@@ -2153,8 +2183,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
                     });
                     unawaited(_savePollingPreferences());
                     if (_isTracking) {
-                      _scheduleNextPoll();
+                      _scheduleNextPoll(immediate: true);
                     }
+                    _refreshNearestUiFromCurrentFix();
                   },
                 ),
                 const SizedBox(height: 10),
@@ -2170,6 +2201,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       _hideNearestWhenFar = value;
                     });
                     unawaited(_savePollingPreferences());
+                    _refreshNearestUiFromCurrentFix();
                   },
                 ),
               ],
