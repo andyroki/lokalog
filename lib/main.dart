@@ -103,7 +103,18 @@ class _ScenarioPageState extends State<ScenarioPage> {
   static const MethodChannel _locationChannel =
       MethodChannel('lokalog/location');
   static const String _debugModePreferenceKey = 'pref_debug_mode';
-  static const int _trackingIntervalSeconds = 5;
+  static const String _showBatteryInfoPreferenceKey =
+      'pref_show_battery_info_debug';
+  static const String _closePollSecondsPreferenceKey = 'pref_close_poll_secs';
+  static const String _farPollSecondsPreferenceKey = 'pref_far_poll_secs';
+  static const String _farDistanceMetersPreferenceKey =
+      'pref_far_distance_meters';
+  static const List<int> _closePollSecondOptions = <int>[30, 60, 300];
+  static const List<int> _farPollSecondOptions = <int>[60, 300, 600];
+  static const List<int> _farDistanceMeterOptions = <int>[1000, 2000, 3000, 5000];
+  static const int _defaultClosePollSeconds = 30;
+  static const int _defaultFarPollSeconds = 300;
+  static const int _defaultFarDistanceMeters = 3000;
   static const int _maxSavedLocations = 5;
   static const int _requiredStableSamples = 3;
   static const double _maxAccuracyMeters = 50;
@@ -139,6 +150,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
   bool _isTracking = false;
   int _selectedTabIndex = 0;
   bool _debugModeEnabled = false;
+  bool _showBatteryInfo = true;
+  int _closePollSeconds = _defaultClosePollSeconds;
+  int _farPollSeconds = _defaultFarPollSeconds;
+  int _farDistanceMeters = _defaultFarDistanceMeters;
   bool _isFetchingCurrentLocation = false;
   DateTime? _lastFixAt;
   SiteDistance? _latestNearest;
@@ -158,6 +173,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   void initState() {
     super.initState();
     unawaited(_loadDebugMode());
+    unawaited(_loadPollingPreferences());
     unawaited(_loadSites());
   }
 
@@ -167,15 +183,170 @@ class _ScenarioPageState extends State<ScenarioPage> {
         'loadPreference',
         <String, dynamic>{'key': _debugModePreferenceKey},
       );
+      final String? showBatteryValue =
+          await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _showBatteryInfoPreferenceKey},
+      );
       if (value == null || !mounted) {
         return;
       }
       setState(() {
         _debugModeEnabled = value == 'true';
+        _showBatteryInfo = showBatteryValue != 'false';
       });
     } catch (_) {
       // Keep default if load fails.
     }
+  }
+
+  Future<void> _setShowBatteryInfo(bool enabled) async {
+    setState(() {
+      _showBatteryInfo = enabled;
+    });
+    try {
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _showBatteryInfoPreferenceKey,
+          'value': enabled.toString(),
+        },
+      );
+    } catch (_) {
+      // Keep local toggle behavior even if persistence fails.
+    }
+
+    if (enabled &&
+        _batteryUsage.isEmpty &&
+        !_isLoadingBatteryUsage &&
+        _debugModeEnabled) {
+      unawaited(_loadBatteryUsage());
+    }
+  }
+
+  Future<void> _loadPollingPreferences() async {
+    try {
+      final String? closeRaw = await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _closePollSecondsPreferenceKey},
+      );
+      final String? farRaw = await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _farPollSecondsPreferenceKey},
+      );
+      final String? distanceRaw = await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _farDistanceMetersPreferenceKey},
+      );
+
+      final int parsedClose = int.tryParse(closeRaw ?? '') ??
+          _defaultClosePollSeconds;
+      final int parsedFar =
+          int.tryParse(farRaw ?? '') ?? _defaultFarPollSeconds;
+      final int parsedDistance = int.tryParse(distanceRaw ?? '') ??
+          _defaultFarDistanceMeters;
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _closePollSeconds = _closePollSecondOptions.contains(parsedClose)
+            ? parsedClose
+            : _defaultClosePollSeconds;
+        _farPollSeconds = _farPollSecondOptions.contains(parsedFar)
+            ? parsedFar
+            : _defaultFarPollSeconds;
+        _farDistanceMeters = _farDistanceMeterOptions.contains(parsedDistance)
+            ? parsedDistance
+            : _defaultFarDistanceMeters;
+      });
+    } catch (_) {
+      // Keep defaults if preference load fails.
+    }
+  }
+
+  Future<void> _savePollingPreferences() async {
+    try {
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _closePollSecondsPreferenceKey,
+          'value': _closePollSeconds.toString(),
+        },
+      );
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _farPollSecondsPreferenceKey,
+          'value': _farPollSeconds.toString(),
+        },
+      );
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _farDistanceMetersPreferenceKey,
+          'value': _farDistanceMeters.toString(),
+        },
+      );
+    } catch (_) {
+      // Keep active runtime values even if persistence fails.
+    }
+  }
+
+  String _formatSecondsOption(int seconds) {
+    if (seconds >= 60) {
+      final int minutes = (seconds / 60).round();
+      return '$minutes min';
+    }
+    return '${seconds}s';
+  }
+
+  String _formatMetersOption(int meters) => '$meters meters';
+
+  int _activePollSeconds() {
+    if (_currentFix == null || _sites.isEmpty) {
+      return _closePollSeconds;
+    }
+    final SiteDistance nearest = _findNearestSite(_currentFix!, _sites);
+    if (nearest.distanceMeters > _farDistanceMeters) {
+      return _farPollSeconds;
+    }
+    return _closePollSeconds;
+  }
+
+  String _pollingModeSummary() {
+    if (_currentFix == null || _sites.isEmpty) {
+      return 'close';
+    }
+    final SiteDistance nearest = _findNearestSite(_currentFix!, _sites);
+    return nearest.distanceMeters > _farDistanceMeters ? 'far' : 'close';
+  }
+
+  Future<void> _pollAndReschedule() async {
+    if (!_isTracking) {
+      return;
+    }
+    await _pollCurrentLocation();
+    if (!_isTracking) {
+      return;
+    }
+    _scheduleNextPoll();
+  }
+
+  void _scheduleNextPoll({bool immediate = false}) {
+    if (!_isTracking) {
+      return;
+    }
+    _trackingTimer?.cancel();
+    if (immediate) {
+      unawaited(_pollAndReschedule());
+      return;
+    }
+    _trackingTimer = Timer(
+      Duration(seconds: _activePollSeconds()),
+      () => unawaited(_pollAndReschedule()),
+    );
   }
 
   List<JobSite> _defaultSites() {
@@ -553,15 +724,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     _isTracking = true;
     _status = 'Tracking started. Reading live GPS signal...';
 
-    _trackingTimer?.cancel();
-    _trackingTimer = Timer.periodic(
-      const Duration(seconds: _trackingIntervalSeconds),
-      (_) {
-        _pollCurrentLocation();
-      },
-    );
-
-    unawaited(_pollCurrentLocation());
+    _scheduleNextPoll(immediate: true);
     setState(() {});
   }
 
@@ -1859,6 +2022,111 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 Text(_isTracking
                     ? 'Tracking is active.'
                     : 'Tracking is stopped.'),
+                const SizedBox(height: 10),
+                Text(
+                  _isTracking
+                      ? 'Current polling: ${_formatSecondsOption(_activePollSeconds())} (${_pollingModeSummary()} mode).'
+                      : 'Close polling uses ${_formatSecondsOption(_closePollSeconds)}. Far polling uses ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.',
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Polling Behavior',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int>(
+                  value: _closePollSeconds,
+                  decoration: const InputDecoration(
+                    labelText: 'Poll when close to a location',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: _closePollSecondOptions
+                      .map(
+                        (int value) => DropdownMenuItem<int>(
+                          value: value,
+                          child: Text(_formatSecondsOption(value)),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (int? value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _closePollSeconds = value;
+                    });
+                    unawaited(_savePollingPreferences());
+                    if (_isTracking) {
+                      _scheduleNextPoll();
+                    }
+                  },
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int>(
+                  value: _farPollSeconds,
+                  decoration: const InputDecoration(
+                    labelText: 'Poll when far from any location',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: _farPollSecondOptions
+                      .map(
+                        (int value) => DropdownMenuItem<int>(
+                          value: value,
+                          child: Text(_formatSecondsOption(value)),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (int? value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _farPollSeconds = value;
+                    });
+                    unawaited(_savePollingPreferences());
+                    if (_isTracking) {
+                      _scheduleNextPoll();
+                    }
+                  },
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int>(
+                  value: _farDistanceMeters,
+                  decoration: const InputDecoration(
+                    labelText: 'Consider far from locations at',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: _farDistanceMeterOptions
+                      .map(
+                        (int value) => DropdownMenuItem<int>(
+                          value: value,
+                          child: Text(_formatMetersOption(value)),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (int? value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _farDistanceMeters = value;
+                    });
+                    unawaited(_savePollingPreferences());
+                    if (_isTracking) {
+                      _scheduleNextPoll();
+                    }
+                  },
+                ),
               ],
             ),
           ),
@@ -1954,6 +2222,16 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
+        Card(
+          child: SwitchListTile(
+            title: const Text('Show Battery Info'),
+            subtitle: const Text('Show or hide battery diagnostics below.'),
+            value: _showBatteryInfo,
+            onChanged: _setShowBatteryInfo,
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_showBatteryInfo) ...<Widget>[
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -2061,6 +2339,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
               ),
             );
           }),
+        ],
       ],
     );
   }
@@ -2162,6 +2441,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
           });
           if (_debugModeEnabled &&
               index == 3 &&
+              _showBatteryInfo &&
               _batteryUsage.isEmpty &&
               !_isLoadingBatteryUsage) {
             unawaited(_loadBatteryUsage());
