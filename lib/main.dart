@@ -171,6 +171,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       'pref_far_distance_meters';
     static const String _hideNearestWhenFarPreferenceKey =
       'pref_hide_nearest_when_far';
+  static const String _useMetricPreferenceKey = 'pref_use_metric';
   static const List<int> _closePollSecondOptions = <int>[30, 60, 300];
   static const List<int> _farPollSecondOptions = <int>[60, 300, 600];
   static const List<int> _farDistanceMeterOptions = <int>[300, 1000, 2000, 3000, 5000];
@@ -217,6 +218,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   int _farPollSeconds = _defaultFarPollSeconds;
   int _farDistanceMeters = _defaultFarDistanceMeters;
   bool _hideNearestWhenFar = true;
+  bool _useMetric = true;
   bool _isFetchingCurrentLocation = false;
   DateTime? _lastFixAt;
   SiteDistance? _latestNearest;
@@ -237,6 +239,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     super.initState();
     unawaited(_loadDebugMode());
     unawaited(_loadPollingPreferences());
+    unawaited(_loadUnitPreference());
     unawaited(_loadSites());
   }
 
@@ -370,6 +373,75 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
   }
 
+  Future<void> _loadUnitPreference() async {
+    try {
+      final String? raw = await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _useMetricPreferenceKey},
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _useMetric = raw != 'false';
+      });
+    } catch (_) {
+      // Keep default (metric) if load fails.
+    }
+  }
+
+  Future<void> _saveUnitPreference() async {
+    try {
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _useMetricPreferenceKey,
+          'value': _useMetric.toString(),
+        },
+      );
+    } catch (_) {
+      // Keep local value even if persistence fails.
+    }
+  }
+
+  /// Format a metre value for display using current unit setting.
+  String _fmtDist(double meters, {int decimals = 1}) {
+    if (_useMetric) {
+      return '${meters.toStringAsFixed(decimals)} m';
+    }
+    final double feet = meters * 3.28084;
+    if (feet >= 5280) {
+      final double miles = feet / 5280;
+      return '${miles.toStringAsFixed(2)} mi';
+    }
+    return '${feet.toStringAsFixed(decimals)} ft';
+  }
+
+  /// Format an integer metre value for dropdowns.
+  String _fmtDistInt(int meters) {
+    if (_useMetric) {
+      return '$meters m';
+    }
+    final double feet = meters * 3.28084;
+    if (feet >= 5280) {
+      final double miles = feet / 5280;
+      return '${miles.toStringAsFixed(2)} mi';
+    }
+    return '${feet.toStringAsFixed(0)} ft';
+  }
+
+  /// Format a speed value (m/s) for display using current unit setting.
+  String _fmtSpeed(double metersPerSecond) {
+    if (_useMetric) {
+      return '${metersPerSecond.toStringAsFixed(1)} m/s';
+    }
+    final double mph = metersPerSecond * 2.23694;
+    return '${mph.toStringAsFixed(1)} mph';
+  }
+
+  /// Format an accuracy value (metres) for display.
+  String _fmtAccuracy(double meters) => _fmtDist(meters);
+
   String _formatSecondsOption(int seconds) {
     if (seconds >= 60) {
       final int minutes = (seconds / 60).round();
@@ -378,7 +450,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return '${seconds}s';
   }
 
-  String _formatMetersOption(int meters) => '$meters meters';
+  String _formatMetersOption(int meters) => _fmtDistInt(meters);
 
   int _activePollSeconds() {
     if (_currentFix == null || _sites.isEmpty) {
@@ -1170,20 +1242,20 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     if (hideNearestDetails) {
       return 'Far from saved locations | '
-          'distance: ${nearest.distanceMeters.toStringAsFixed(1)}m | '
+          'distance: ${_fmtDist(nearest.distanceMeters)} | '
           'accuracy: $accuracyLabel | '
           'motion: ${lowSpeed ? 'stationary' : 'moving'}';
     }
 
     return 'Nearest: ${nearest.site.address} | '
-        'distance: ${nearest.distanceMeters.toStringAsFixed(1)}m | '
-        'target: ${nearest.site.requiredDwellMinutes}m | '
-        'dwell: ${dwell.toStringAsFixed(1)}m | '
-        'remaining: ${remaining.toStringAsFixed(1)}m | '
+        'distance: ${_fmtDist(nearest.distanceMeters)} | '
+        'target: ${nearest.site.requiredDwellMinutes} min | '
+        'dwell: ${dwell.toStringAsFixed(1)} min | '
+        'remaining: ${remaining.toStringAsFixed(1)} min | '
         'accuracy: $accuracyLabel | '
         'motion: ${lowSpeed ? 'stationary' : 'moving'} | '
         'geofence: ${inGeofence ? 'inside' : 'outside'} '
-        '(${nearest.distanceMeters.toStringAsFixed(0)}/${effectiveRadius.toStringAsFixed(0)}m)';
+        '(${_fmtDist(nearest.distanceMeters, decimals: 0)}/${_fmtDist(effectiveRadius, decimals: 0)})';
   }
 
   Future<_GeocodePoint?> _lookupCoordinates(_AddLocationInput input) async {
@@ -2049,8 +2121,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
               child: Text(
                 'Current GPS: ${_currentFix!.lat.toStringAsFixed(5)}, '
                 '${_currentFix!.lng.toStringAsFixed(5)}\n'
-                'Accuracy: ${_currentFix!.accuracyMeters.toStringAsFixed(1)}m | '
-                'Speed: ${_currentFix!.speedMetersPerSecond.toStringAsFixed(1)} m/s',
+                'Accuracy: ${_fmtAccuracy(_currentFix!.accuracyMeters)} | '
+                'Speed: ${_fmtSpeed(_currentFix!.speedMetersPerSecond)}',
               ),
             ),
           ),
@@ -2213,6 +2285,21 @@ class _ScenarioPageState extends State<ScenarioPage> {
             subtitle: const Text('Toggle between light and dark mode.'),
             value: widget.isDarkMode,
             onChanged: widget.onDarkModeChanged,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: SwitchListTile(
+            title: const Text('Units'),
+            subtitle: Text(_useMetric ? 'Metric (m, m/s)' : 'English (ft, mph)'),
+            value: _useMetric,
+            onChanged: (bool value) {
+              setState(() {
+                _useMetric = value;
+              });
+              unawaited(_saveUnitPreference());
+              _refreshNearestUiFromCurrentFix();
+            },
           ),
         ),
         const SizedBox(height: 12),
