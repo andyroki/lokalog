@@ -93,6 +93,17 @@ class MainActivity : FlutterActivity() {
 						result.success(GeofenceBackground.loadBackgroundLogsJson(this))
 					}
 
+					"deleteBackgroundLog" -> {
+						val address = call.argument<String>("address")
+						val timestamp = call.argument<Number>("timestamp")?.toLong()
+						if (address.isNullOrBlank() || timestamp == null) {
+							result.error("INVALID_ARGUMENT", "Missing address or timestamp", null)
+							return@setMethodCallHandler
+						}
+						GeofenceBackground.deleteBackgroundLog(this, address, timestamp)
+						result.success(null)
+					}
+
 					"hasBackgroundLocationPermission" -> {
 						result.success(GeofenceBackground.hasBackgroundLocationPermission(this))
 					}

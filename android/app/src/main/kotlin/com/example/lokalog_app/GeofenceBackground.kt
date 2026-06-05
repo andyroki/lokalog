@@ -56,6 +56,24 @@ object GeofenceBackground {
         return prefs.getString(BACKGROUND_LOGS_KEY, "[]") ?: "[]"
     }
 
+    fun deleteBackgroundLog(context: Context, address: String, timestamp: Long) {
+        val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+        val current = JSONArray(prefs.getString(BACKGROUND_LOGS_KEY, "[]") ?: "[]")
+        val filtered = JSONArray()
+
+        for (index in 0 until current.length()) {
+            val item = current.optJSONObject(index) ?: continue
+            val itemAddress = item.optString("address")
+            val itemTimestamp = item.optLong("timestamp", Long.MIN_VALUE)
+            if (itemAddress == address && itemTimestamp == timestamp) {
+                continue
+            }
+            filtered.put(item)
+        }
+
+        prefs.edit().putString(BACKGROUND_LOGS_KEY, filtered.toString()).apply()
+    }
+
     fun hasBackgroundLocationPermission(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             return true

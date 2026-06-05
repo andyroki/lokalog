@@ -120,11 +120,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
     60
   ];
   static const String _sitesStorageKey = 'saved_job_sites_v1';
+  static const String _deletedLogKeysPreferenceKey =
+      'deleted_background_log_keys_v1';
 
   final List<JobSite> _sites = <JobSite>[];
   final List<JobLog> _logs = <JobLog>[];
+  final Set<String> _deletedLogKeys = <String>{};
   final Set<String> _sessionLoggedAddresses = <String>{};
   final Map<String, double> _dwellMinutes = <String, double>{};
+  bool _deletedLogKeysLoaded = false;
 
   Timer? _trackingTimer;
   Timer? _promptTimer;
@@ -399,6 +403,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _loadBackgroundLogs() async {
     try {
+      await _ensureDeletedLogKeysLoaded();
+
       final String? raw =
           await _locationChannel.invokeMethod<String>('loadBackgroundLogs');
       if (raw == null || raw.trim().isEmpty) {
@@ -413,6 +419,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final List<JobLog> loadedLogs = decoded
           .whereType<Map<String, dynamic>>()
           .map((Map<String, dynamic> item) {
+        final int timestampMillis =
+            ((item['timestamp'] as num?)?.toInt() ??
+                DateTime.now().millisecondsSinceEpoch);
         return JobLog(
           address: (item['address'] ?? '').toString(),
           lat: ((item['lat'] as num?)?.toDouble() ?? 0),
@@ -421,10 +430,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
           confirmedByUser: (item['confirmedByUser'] as bool?) ?? false,
           autoLogged: (item['autoLogged'] as bool?) ?? true,
           timestamp: DateTime.fromMillisecondsSinceEpoch(
-            ((item['timestamp'] as num?)?.toInt() ??
-                DateTime.now().millisecondsSinceEpoch),
+            timestampMillis,
           ),
         );
+      }).where((JobLog log) {
+        final String key = _logStorageKey(
+          address: log.address,
+          timestampMillis: log.timestamp.millisecondsSinceEpoch,
+        );
+        return !_deletedLogKeys.contains(key);
       }).toList();
 
       if (!mounted || loadedLogs.isEmpty) {
@@ -447,6 +461,53 @@ class _ScenarioPageState extends State<ScenarioPage> {
       });
     } catch (_) {
       // Ignore background log load errors; they are not fatal.
+    }
+  }
+
+  String _logStorageKey({
+    required String address,
+    required int timestampMillis,
+  }) {
+    return '$address|$timestampMillis';
+  }
+
+  Future<void> _ensureDeletedLogKeysLoaded() async {
+    if (_deletedLogKeysLoaded) {
+      return;
+    }
+
+    try {
+      final String? raw = await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _deletedLogKeysPreferenceKey},
+      );
+
+      if (raw != null && raw.trim().isNotEmpty) {
+        final dynamic decoded = jsonDecode(raw);
+        if (decoded is List<dynamic>) {
+          _deletedLogKeys
+            ..clear()
+            ..addAll(decoded.whereType<String>());
+        }
+      }
+    } catch (_) {
+      // Keep best-effort behavior if preference storage is unavailable.
+    }
+
+    _deletedLogKeysLoaded = true;
+  }
+
+  Future<void> _saveDeletedLogKeys() async {
+    try {
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _deletedLogKeysPreferenceKey,
+          'value': jsonEncode(_deletedLogKeys.toList()),
+        },
+      );
+    } catch (_) {
+      // Keep local behavior if preference storage is unavailable.
     }
   }
 
@@ -1583,10 +1644,31 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return;
     }
 
+    final String deletedKey = _logStorageKey(
+      address: log.address,
+      timestampMillis: log.timestamp.millisecondsSinceEpoch,
+    );
+    _deletedLogKeys.add(deletedKey);
+    unawaited(_saveDeletedLogKeys());
+
     setState(() {
       _logs.removeAt(index);
       _status = 'Deleted one log entry.';
     });
+
+    try {
+      await _locationChannel.invokeMethod<void>(
+        'deleteBackgroundLog',
+        <String, dynamic>{
+          'address': log.address,
+          'timestamp': log.timestamp.millisecondsSinceEpoch,
+        },
+      );
+    } on MissingPluginException {
+      // Desktop/iOS/web may not implement background log persistence.
+    } on PlatformException {
+      // Keep local delete behavior even if persistence fails.
+    }
   }
 
   Widget _buildLogScreen() {
