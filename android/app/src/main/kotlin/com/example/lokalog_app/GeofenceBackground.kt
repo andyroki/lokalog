@@ -88,6 +88,7 @@ object GeofenceBackground {
         val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
         val current = JSONArray(prefs.getString(BACKGROUND_LOGS_KEY, "[]") ?: "[]")
         val entry = JSONObject().apply {
+            put("name", site.name)
             put("address", site.address)
             put("lat", site.lat)
             put("lng", site.lng)

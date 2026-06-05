@@ -21,12 +21,18 @@ class LokaLogApp extends StatefulWidget {
 class _LokaLogAppState extends State<LokaLogApp> {
   static const MethodChannel _prefChannel = MethodChannel('lokalog/location');
   static const String _darkModePreferenceKey = 'pref_dark_mode';
+  static const String _fontScalePreferenceKey = 'pref_font_scale';
+  static const double _minFontScale = 0.85;
+  static const double _maxFontScale = 1.35;
+  static const double _fontScaleStep = 0.1;
   ThemeMode _themeMode = ThemeMode.light;
+  double _fontScale = 1.0;
 
   @override
   void initState() {
     super.initState();
     unawaited(_loadDarkMode());
+    unawaited(_loadFontScale());
   }
 
   Future<void> _loadDarkMode() async {
@@ -46,6 +52,24 @@ class _LokaLogAppState extends State<LokaLogApp> {
     }
   }
 
+  Future<void> _loadFontScale() async {
+    try {
+      final String? raw = await _prefChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _fontScalePreferenceKey},
+      );
+      final double parsed = double.tryParse(raw ?? '') ?? 1.0;
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _fontScale = parsed.clamp(_minFontScale, _maxFontScale);
+      });
+    } catch (_) {
+      // Keep default font scale if load fails.
+    }
+  }
+
   void _setDarkMode(bool enabled) {
     setState(() {
       _themeMode = enabled ? ThemeMode.dark : ThemeMode.light;
@@ -55,6 +79,20 @@ class _LokaLogAppState extends State<LokaLogApp> {
       <String, dynamic>{
         'key': _darkModePreferenceKey,
         'value': enabled.toString(),
+      },
+    ));
+  }
+
+  void _setFontScale(double value) {
+    final double clamped = value.clamp(_minFontScale, _maxFontScale);
+    setState(() {
+      _fontScale = clamped;
+    });
+    unawaited(_prefChannel.invokeMethod<void>(
+      'savePreference',
+      <String, dynamic>{
+        'key': _fontScalePreferenceKey,
+        'value': clamped.toStringAsFixed(2),
       },
     ));
   }
@@ -76,10 +114,22 @@ class _LokaLogAppState extends State<LokaLogApp> {
           brightness: Brightness.dark,
         ),
       ),
+      builder: (BuildContext context, Widget? child) {
+        final MediaQueryData media = MediaQuery.of(context);
+        return MediaQuery(
+          data: media.copyWith(textScaler: TextScaler.linear(_fontScale)),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       themeMode: _themeMode,
       home: ScenarioPage(
         isDarkMode: _themeMode == ThemeMode.dark,
         onDarkModeChanged: _setDarkMode,
+        fontScale: _fontScale,
+        minFontScale: _minFontScale,
+        maxFontScale: _maxFontScale,
+        fontScaleStep: _fontScaleStep,
+        onFontScaleChanged: _setFontScale,
       ),
     );
   }
@@ -90,10 +140,20 @@ class ScenarioPage extends StatefulWidget {
     super.key,
     required this.isDarkMode,
     required this.onDarkModeChanged,
+    required this.fontScale,
+    required this.minFontScale,
+    required this.maxFontScale,
+    required this.fontScaleStep,
+    required this.onFontScaleChanged,
   });
 
   final bool isDarkMode;
   final ValueChanged<bool> onDarkModeChanged;
+  final double fontScale;
+  final double minFontScale;
+  final double maxFontScale;
+  final double fontScaleStep;
+  final ValueChanged<double> onFontScaleChanged;
 
   @override
   State<ScenarioPage> createState() => _ScenarioPageState();
@@ -614,6 +674,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
             ((item['timestamp'] as num?)?.toInt() ??
                 DateTime.now().millisecondsSinceEpoch);
         return JobLog(
+          name: (item['name'] ?? item['siteName'] ?? item['address'] ?? '')
+            .toString(),
           address: (item['address'] ?? '').toString(),
           lat: ((item['lat'] as num?)?.toDouble() ?? 0),
           lng: ((item['lng'] as num?)?.toDouble() ?? 0),
@@ -1060,6 +1122,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     _logs.insert(
       0,
       JobLog(
+        name: site.name,
         address: site.address,
         lat: fix.lat,
         lng: fix.lng,
@@ -1991,15 +2054,21 @@ class _ScenarioPageState extends State<ScenarioPage> {
           ..._logs.asMap().entries.map((MapEntry<int, JobLog> entry) {
             final int index = entry.key;
             final JobLog log = entry.value;
+            final String clientName =
+                log.name.trim().isEmpty ? 'Client' : log.name.trim();
+            final String address = log.address.trim();
+            final bool showAddressLine =
+                address.isNotEmpty && address != clientName;
             return Card(
               child: ListTile(
-                title: Text(log.address),
+                title: Text('Customer: $clientName'),
                 subtitle: Text(
+                  '${showAddressLine ? '$address\n' : ''}'
                   '${_formatLogTimestamp(log.timestamp)}\n'
                   'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
                   '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}',
                 ),
-                isThreeLine: true,
+                isThreeLine: showAddressLine,
                 trailing: IconButton(
                   tooltip: 'Delete log',
                   onPressed: () => _onDeleteLogEntry(index, log),
@@ -2046,6 +2115,54 @@ class _ScenarioPageState extends State<ScenarioPage> {
             subtitle: const Text('Toggle between light and dark mode.'),
             value: widget.isDarkMode,
             onChanged: widget.onDarkModeChanged,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Font Size',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Current: ${widget.fontScale.toStringAsFixed(2)}x',
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    OutlinedButton.icon(
+                      onPressed: widget.fontScale <= widget.minFontScale
+                          ? null
+                          : () {
+                              widget.onFontScaleChanged(
+                                widget.fontScale - widget.fontScaleStep,
+                              );
+                            },
+                      icon: const Icon(Icons.remove),
+                      label: const Text('Decrease'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: widget.fontScale >= widget.maxFontScale
+                          ? null
+                          : () {
+                              widget.onFontScaleChanged(
+                                widget.fontScale + widget.fontScaleStep,
+                              );
+                            },
+                      icon: const Icon(Icons.add),
+                      label: const Text('Increase'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 12),
@@ -2650,6 +2767,7 @@ class SiteDistance {
 
 class JobLog {
   JobLog({
+    required this.name,
     required this.address,
     required this.lat,
     required this.lng,
@@ -2659,6 +2777,7 @@ class JobLog {
     required this.timestamp,
   });
 
+  final String name;
   final String address;
   final double lat;
   final double lng;
