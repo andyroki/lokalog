@@ -1285,6 +1285,83 @@ class _ScenarioPageState extends State<ScenarioPage> {
         '$hour12:$minute $meridiem';
   }
 
+  String _buildShareTextForLog(JobLog log) {
+    final String clientName = log.name.trim().isEmpty ? 'Client' : log.name;
+    return 'Lokalog Job Log\n'
+        'Customer: $clientName\n'
+        'Address: ${log.address}\n'
+        'Time: ${_formatLogTimestamp(log.timestamp)}\n'
+        'Confidence: ${log.confidence.toStringAsFixed(1)}%\n'
+        'Type: ${log.confirmedByUser ? 'confirmed' : 'auto-logged'}';
+  }
+
+  Future<void> _shareLogEntry(JobLog log) async {
+    final String clientName = log.name.trim().isEmpty ? 'Client' : log.name;
+    await _shareText(
+      text: _buildShareTextForLog(log),
+      subject: 'Lokalog: $clientName',
+    );
+  }
+
+  Future<void> _shareText({
+    required String text,
+    required String subject,
+  }) async {
+    try {
+      await _locationChannel.invokeMethod<void>(
+        'shareText',
+        <String, dynamic>{
+          'text': text,
+          'subject': subject,
+        },
+      );
+    } on MissingPluginException {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Share is currently supported on Android only.'),
+        ),
+      );
+    } on PlatformException {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open share sheet.')),
+      );
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open share sheet.')),
+      );
+    }
+  }
+
+  Future<void> _shareAllLogs() async {
+    if (_logs.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No logs available to share.')),
+      );
+      return;
+    }
+
+    final String joined = _logs
+        .map((JobLog log) => _buildShareTextForLog(log))
+        .join('\n\n----------------\n\n');
+
+    await _shareText(
+      text: joined,
+      subject: 'Lokalog: ${_logs.length} shared logs',
+    );
+  }
+
   String get _appBarSectionTitle {
     if (_selectedTabIndex == 0) {
       return 'Location Log';
@@ -2043,9 +2120,20 @@ class _ScenarioPageState extends State<ScenarioPage> {
             ),
           ),
         const SizedBox(height: 16),
-        const Text(
-          'Locations Log',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        Row(
+          children: <Widget>[
+            const Expanded(
+              child: Text(
+                'Locations Log',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _shareAllLogs,
+              icon: const Icon(Icons.share),
+              label: const Text('Share All'),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         if (_logs.isEmpty)
@@ -2069,11 +2157,21 @@ class _ScenarioPageState extends State<ScenarioPage> {
                   '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}',
                 ),
                 isThreeLine: showAddressLine,
-                trailing: IconButton(
-                  tooltip: 'Delete log',
-                  onPressed: () => _onDeleteLogEntry(index, log),
-                  icon: const Icon(Icons.delete),
-                  color: Theme.of(context).colorScheme.error,
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    IconButton(
+                      tooltip: 'Share log',
+                      onPressed: () => _shareLogEntry(log),
+                      icon: const Icon(Icons.share),
+                    ),
+                    IconButton(
+                      tooltip: 'Delete log',
+                      onPressed: () => _onDeleteLogEntry(index, log),
+                      icon: const Icon(Icons.delete),
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ],
                 ),
               ),
             );
@@ -2220,7 +2318,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int>(
-                  value: _closePollSeconds,
+                  initialValue: _closePollSeconds,
                   decoration: const InputDecoration(
                     labelText: 'Poll when close to a location',
                     border: OutlineInputBorder(),
@@ -2249,7 +2347,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int>(
-                  value: _farPollSeconds,
+                  initialValue: _farPollSeconds,
                   decoration: const InputDecoration(
                     labelText: 'Poll when far from any location',
                     border: OutlineInputBorder(),
@@ -2278,7 +2376,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int>(
-                  value: _farDistanceMeters,
+                  initialValue: _farDistanceMeters,
                   decoration: const InputDecoration(
                     labelText: 'Consider far from locations at',
                     border: OutlineInputBorder(),

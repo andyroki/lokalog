@@ -128,9 +128,33 @@ class MainActivity : FlutterActivity() {
 						getAppBatteryUsage(result)
 					}
 
+					"shareText" -> {
+						val text = call.argument<String>("text")
+						val subject = call.argument<String>("subject")
+						if (text.isNullOrBlank()) {
+							result.error("INVALID_ARGUMENT", "Missing text", null)
+							return@setMethodCallHandler
+						}
+						shareText(text, subject)
+						result.success(true)
+					}
+
 					else -> result.notImplemented()
 				}
 			}
+	}
+
+	private fun shareText(text: String, subject: String?) {
+		val intent = Intent(Intent.ACTION_SEND).apply {
+			type = "text/plain"
+			putExtra(Intent.EXTRA_TEXT, text)
+			if (!subject.isNullOrBlank()) {
+				putExtra(Intent.EXTRA_SUBJECT, subject)
+			}
+		}
+		val chooser = Intent.createChooser(intent, "Share log")
+		chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+		startActivity(chooser)
 	}
 
 	private fun openLocationSettings(result: MethodChannel.Result) {
