@@ -109,9 +109,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
   static const String _farPollSecondsPreferenceKey = 'pref_far_poll_secs';
   static const String _farDistanceMetersPreferenceKey =
       'pref_far_distance_meters';
+    static const String _hideNearestWhenFarPreferenceKey =
+      'pref_hide_nearest_when_far';
   static const List<int> _closePollSecondOptions = <int>[30, 60, 300];
   static const List<int> _farPollSecondOptions = <int>[60, 300, 600];
-  static const List<int> _farDistanceMeterOptions = <int>[1000, 2000, 3000, 5000];
+  static const List<int> _farDistanceMeterOptions = <int>[300, 1000, 2000, 3000, 5000];
   static const int _defaultClosePollSeconds = 30;
   static const int _defaultFarPollSeconds = 300;
   static const int _defaultFarDistanceMeters = 3000;
@@ -154,6 +156,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   int _closePollSeconds = _defaultClosePollSeconds;
   int _farPollSeconds = _defaultFarPollSeconds;
   int _farDistanceMeters = _defaultFarDistanceMeters;
+  bool _hideNearestWhenFar = true;
   bool _isFetchingCurrentLocation = false;
   DateTime? _lastFixAt;
   SiteDistance? _latestNearest;
@@ -238,6 +241,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
         'loadPreference',
         <String, dynamic>{'key': _farDistanceMetersPreferenceKey},
       );
+      final String? hideNearestRaw =
+          await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _hideNearestWhenFarPreferenceKey},
+      );
 
       final int parsedClose = int.tryParse(closeRaw ?? '') ??
           _defaultClosePollSeconds;
@@ -260,6 +268,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _farDistanceMeters = _farDistanceMeterOptions.contains(parsedDistance)
             ? parsedDistance
             : _defaultFarDistanceMeters;
+        _hideNearestWhenFar = hideNearestRaw != 'false';
       });
     } catch (_) {
       // Keep defaults if preference load fails.
@@ -287,6 +296,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
         <String, dynamic>{
           'key': _farDistanceMetersPreferenceKey,
           'value': _farDistanceMeters.toString(),
+        },
+      );
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _hideNearestWhenFarPreferenceKey,
+          'value': _hideNearestWhenFar.toString(),
         },
       );
     } catch (_) {
@@ -321,6 +337,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
     final SiteDistance nearest = _findNearestSite(_currentFix!, _sites);
     return nearest.distanceMeters > _farDistanceMeters ? 'far' : 'close';
+  }
+
+  bool _shouldHideNearestInfo(SiteDistance nearest) {
+    return _hideNearestWhenFar && nearest.distanceMeters > _farDistanceMeters;
   }
 
   Future<void> _pollAndReschedule() async {
@@ -969,6 +989,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         lowSpeed: lowSpeed,
         inGeofence: inGeofence,
         effectiveRadius: effectiveRadius,
+        hideNearestDetails: _shouldHideNearestInfo(nearest),
       );
     });
   }
@@ -1049,11 +1070,20 @@ class _ScenarioPageState extends State<ScenarioPage> {
     required bool lowSpeed,
     required bool inGeofence,
     required double effectiveRadius,
+    required bool hideNearestDetails,
   }) {
     final double dwell = _dwellMinutes[nearest.site.address] ?? 0;
     final double remaining = _minutesRemainingToLog(nearest.site);
     final String accuracyLabel =
         goodAccuracy ? 'good' : 'poor (nearest estimate may drift)';
+
+    if (hideNearestDetails) {
+      return 'Far from saved locations | '
+          'distance: ${nearest.distanceMeters.toStringAsFixed(1)}m | '
+          'accuracy: $accuracyLabel | '
+          'motion: ${lowSpeed ? 'stationary' : 'moving'}';
+    }
+
     return 'Nearest: ${nearest.site.address} | '
         'distance: ${nearest.distanceMeters.toStringAsFixed(1)}m | '
         'target: ${nearest.site.requiredDwellMinutes}m | '
@@ -1856,7 +1886,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
               ),
             ),
           ),
-        if (_latestNearest != null)
+        if (_latestNearest != null && !_shouldHideNearestInfo(_latestNearest!))
           Card(
             color: Theme.of(context).colorScheme.secondaryContainer,
             child: Padding(
@@ -2127,6 +2157,21 @@ class _ScenarioPageState extends State<ScenarioPage> {
                     }
                   },
                 ),
+                const SizedBox(height: 10),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Hide nearest when far'),
+                  subtitle: Text(
+                    'Hide nearest-location details when distance is beyond ${_formatMetersOption(_farDistanceMeters)}.',
+                  ),
+                  value: _hideNearestWhenFar,
+                  onChanged: (bool value) {
+                    setState(() {
+                      _hideNearestWhenFar = value;
+                    });
+                    unawaited(_savePollingPreferences());
+                  },
+                ),
               ],
             ),
           ),
@@ -2228,6 +2273,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
             subtitle: const Text('Show or hide battery diagnostics below.'),
             value: _showBatteryInfo,
             onChanged: _setShowBatteryInfo,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(
+              _isTracking
+                  ? 'Position polling: ${_formatSecondsOption(_activePollSeconds())} (${_pollingModeSummary()} mode).'
+                  : 'Position polling is inactive. Close: ${_formatSecondsOption(_closePollSeconds)}, Far: ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.',
+            ),
           ),
         ),
         const SizedBox(height: 12),
