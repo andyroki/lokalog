@@ -1,4 +1,4 @@
-package com.example.lokalog_app
+package com.lokalog_app
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -148,6 +148,15 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         geofences.forEach { geofence ->
             val site = GeofenceBackground.findSiteById(context, geofence.requestId) ?: return@forEach
             GeofenceBackground.appendBackgroundLog(context, site)
+        }
+    }
+}
+
+class GeofenceReRegisterReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED -> GeofenceBackground.syncGeofences(context)
         }
     }
 }

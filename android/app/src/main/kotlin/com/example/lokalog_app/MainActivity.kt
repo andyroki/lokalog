@@ -1,7 +1,9 @@
-package com.example.lokalog_app
+package com.lokalog_app
 
 import android.Manifest
 import android.app.AppOpsManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.usage.UsageStats
 import android.app.usage.UsageStatsManager
 import android.content.Intent
@@ -13,6 +15,8 @@ import android.provider.Settings
 import android.location.LocationManager
 import android.util.Log
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -27,6 +31,8 @@ class MainActivity : FlutterActivity() {
 	private val channelName = "lokalog/location"
 	private val sitesStorageKey = "saved_job_sites_v1"
 	private val locationPermissionRequestCode = 1001
+	private val logReminderChannelId = "lokalog_log_reminder_channel"
+	private val logReminderNotificationId = 7301
 	private var permissionResult: MethodChannel.Result? = null
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -139,6 +145,27 @@ class MainActivity : FlutterActivity() {
 						result.success(true)
 					}
 
+					"showLogReminderNotification" -> {
+						val address = call.argument<String>("address")
+						val name = call.argument<String>("name")
+						val countdownSeconds = call.argument<Number>("countdownSeconds")?.toInt() ?: 12
+						if (address.isNullOrBlank()) {
+							result.error("INVALID_ARGUMENT", "Missing address", null)
+							return@setMethodCallHandler
+						}
+						showLogReminderNotification(
+							address = address,
+							name = name,
+							countdownSeconds = countdownSeconds
+						)
+						result.success(true)
+					}
+
+					"cancelLogReminderNotification" -> {
+						cancelLogReminderNotification()
+						result.success(true)
+					}
+
 					else -> result.notImplemented()
 				}
 			}
@@ -155,6 +182,58 @@ class MainActivity : FlutterActivity() {
 		val chooser = Intent.createChooser(intent, "Share log")
 		chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 		startActivity(chooser)
+	}
+
+	private fun showLogReminderNotification(address: String, name: String?, countdownSeconds: Int) {
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+			val granted = ContextCompat.checkSelfPermission(
+				this,
+				Manifest.permission.POST_NOTIFICATIONS
+			) == PackageManager.PERMISSION_GRANTED
+			if (!granted) {
+				return
+			}
+		}
+
+		ensureLogReminderNotificationChannel()
+		val customerLabel = if (name.isNullOrBlank()) "Client" else name
+		val message = "$customerLabel at $address. Auto-log in ${countdownSeconds}s if no response."
+
+		val notification = NotificationCompat.Builder(this, logReminderChannelId)
+			.setSmallIcon(android.R.drawable.ic_dialog_info)
+			.setContentTitle("Lokalog reminder")
+			.setContentText(message)
+			.setStyle(NotificationCompat.BigTextStyle().bigText(message))
+			.setPriority(NotificationCompat.PRIORITY_HIGH)
+			.setAutoCancel(true)
+			.build()
+
+		NotificationManagerCompat.from(this).notify(logReminderNotificationId, notification)
+	}
+
+	private fun cancelLogReminderNotification() {
+		NotificationManagerCompat.from(this).cancel(logReminderNotificationId)
+	}
+
+	private fun ensureLogReminderNotificationChannel() {
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+			return
+		}
+
+		val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+		val existing = manager.getNotificationChannel(logReminderChannelId)
+		if (existing != null) {
+			return
+		}
+
+		val channel = NotificationChannel(
+			logReminderChannelId,
+			"Log reminders",
+			NotificationManager.IMPORTANCE_HIGH
+		).apply {
+			description = "Reminders to confirm nearby location logs."
+		}
+		manager.createNotificationChannel(channel)
 	}
 
 	private fun openLocationSettings(result: MethodChannel.Result) {

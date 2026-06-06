@@ -185,6 +185,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     5000
   ];
   static const List<int> _outOfGeofenceRetriggerMinuteOptions = <int>[
+    1,
     20,
     45,
     60
@@ -1241,6 +1242,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     _trackingTimer?.cancel();
     _trackingTimer = null;
     _promptTimer?.cancel();
+    unawaited(_cancelLogReminderNotification());
     setState(() {
       _isTracking = false;
       _pendingSite = null;
@@ -1388,6 +1390,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     _pendingSite = site;
     _promptCountdown = 12;
     _promptTimer?.cancel();
+    unawaited(_showLogReminderNotification(site, _promptCountdown));
     _promptTimer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
       if (_pendingSite == null) {
         timer.cancel();
@@ -1397,9 +1400,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _logJob(site, confirmedByUser: false, autoLogged: true);
         timer.cancel();
       } else {
-        setState(() {
-          _promptCountdown -= 1;
-        });
+        _promptCountdown -= 1;
       }
     });
   }
@@ -1437,6 +1438,37 @@ class _ScenarioPageState extends State<ScenarioPage> {
           ? 'No response received. Job auto-logged for ${site.address}.'
           : 'Job confirmed and logged for ${site.address}.';
     });
+    unawaited(_cancelLogReminderNotification());
+  }
+
+  void _debugRetriggerCurrentSite() {
+    if (_pendingSite != null) {
+      setState(() {
+        _status = 'A log reminder is already active.';
+      });
+      return;
+    }
+
+    final JobSite? site = _candidateSite ?? _latestNearest?.site;
+    if (site == null) {
+      setState(() {
+        _status = 'No nearby site available to retrigger.';
+      });
+      return;
+    }
+
+    setState(() {
+      _sessionLoggedAddresses.remove(site.address);
+      _outOfGeofenceSince.remove(site.address);
+      _stableSamples = max(_stableSamples, _requiredStableSamples);
+      _dwellMinutes[site.address] = max(
+        _dwellMinutes[site.address] ?? 0,
+        site.requiredDwellMinutes.toDouble(),
+      );
+      _status = 'Debug retrigger armed for ${site.address}.';
+    });
+
+    _showConfirmationPrompt(site);
   }
 
   double _confidenceScore(LocationFix fix, JobSite site) {
@@ -1656,6 +1688,33 @@ class _ScenarioPageState extends State<ScenarioPage> {
       text: joined,
       subject: 'Lokalog: ${_logs.length} shared logs',
     );
+  }
+
+  Future<void> _showLogReminderNotification(JobSite site, int countdown) async {
+    try {
+      await _locationChannel.invokeMethod<void>(
+        'showLogReminderNotification',
+        <String, dynamic>{
+          'name': site.name,
+          'address': site.address,
+          'countdownSeconds': countdown,
+        },
+      );
+    } on MissingPluginException {
+      // Notification reminder is Android-only in this build.
+    } on PlatformException {
+      // Keep core log flow even if notification fails.
+    }
+  }
+
+  Future<void> _cancelLogReminderNotification() async {
+    try {
+      await _locationChannel.invokeMethod<void>('cancelLogReminderNotification');
+    } on MissingPluginException {
+      // Notification reminder is Android-only in this build.
+    } on PlatformException {
+      // Ignore cancellation errors.
+    }
   }
 
   String get _appBarSectionTitle {
@@ -2365,56 +2424,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
               ),
             ),
           ),
-        if (_pendingSite != null)
-          Card(
-            color: Theme.of(context).colorScheme.tertiaryContainer,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    'Confirm job at ${_pendingSite!.address}?',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Auto-log in ${_promptCountdown}s if no response.',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: <Widget>[
-                      FilledButton(
-                        onPressed: () => _logJob(
-                          _pendingSite!,
-                          confirmedByUser: true,
-                          autoLogged: false,
-                        ),
-                        child: const Text('Confirm'),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton(
-                        onPressed: () {
-                          _promptTimer?.cancel();
-                          setState(() {
-                            _pendingSite = null;
-                            _status = 'User skipped confirmation prompt.';
-                          });
-                        },
-                        child: const Text('Dismiss'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
         const SizedBox(height: 16),
         Row(
           children: <Widget>[
@@ -2860,6 +2869,31 @@ class _ScenarioPageState extends State<ScenarioPage> {
               _isTracking
                   ? 'Position polling: ${_formatSecondsOption(_activePollSeconds())} (${_pollingModeSummary()} mode).'
                   : 'Position polling is inactive. Close: ${_formatSecondsOption(_closePollSeconds)}, Far: ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.',
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Retrigger Logging',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Force a new log attempt for the current or nearest site without leaving geofence.',
+                ),
+                const SizedBox(height: 10),
+                FilledButton.icon(
+                  onPressed: _debugRetriggerCurrentSite,
+                  icon: const Icon(Icons.restart_alt),
+                  label: const Text('Retrigger Now'),
+                ),
+              ],
             ),
           ),
         ),
