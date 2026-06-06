@@ -169,15 +169,30 @@ class _ScenarioPageState extends State<ScenarioPage> {
   static const String _farPollSecondsPreferenceKey = 'pref_far_poll_secs';
   static const String _farDistanceMetersPreferenceKey =
       'pref_far_distance_meters';
-    static const String _hideNearestWhenFarPreferenceKey =
+  static const String _hideNearestWhenFarPreferenceKey =
       'pref_hide_nearest_when_far';
+  static const String _outOfGeofenceRetriggerMinutesPreferenceKey =
+      'pref_out_of_geofence_retrigger_minutes';
   static const String _useMetricPreferenceKey = 'pref_use_metric';
+  static const String _trackingEnabledPreferenceKey = 'pref_tracking_enabled';
   static const List<int> _closePollSecondOptions = <int>[30, 60, 300];
   static const List<int> _farPollSecondOptions = <int>[60, 300, 600];
-  static const List<int> _farDistanceMeterOptions = <int>[300, 1000, 2000, 3000, 5000];
+  static const List<int> _farDistanceMeterOptions = <int>[
+    300,
+    1000,
+    2000,
+    3000,
+    5000
+  ];
+  static const List<int> _outOfGeofenceRetriggerMinuteOptions = <int>[
+    20,
+    45,
+    60
+  ];
   static const int _defaultClosePollSeconds = 30;
   static const int _defaultFarPollSeconds = 300;
   static const int _defaultFarDistanceMeters = 3000;
+  static const int _defaultOutOfGeofenceRetriggerMinutes = 20;
   static const int _maxSavedLocations = 5;
   static const int _requiredStableSamples = 3;
   static const double _maxAccuracyMeters = 50;
@@ -203,6 +218,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
   final Set<String> _sessionLoggedAddresses = <String>{};
   final Map<String, double> _dwellMinutes = <String, double>{};
   bool _deletedLogKeysLoaded = false;
+  bool _autoStartTrackingAttempted = false;
+  bool _trackingOffStartupDialogShown = false;
+  bool _trackingPreferenceLoaded = false;
+  bool _trackingEnabledPreference = true;
 
   Timer? _trackingTimer;
   Timer? _promptTimer;
@@ -217,6 +236,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   int _closePollSeconds = _defaultClosePollSeconds;
   int _farPollSeconds = _defaultFarPollSeconds;
   int _farDistanceMeters = _defaultFarDistanceMeters;
+  int _outOfGeofenceRetriggerMinutes =
+      _defaultOutOfGeofenceRetriggerMinutes;
   bool _hideNearestWhenFar = true;
   bool _useMetric = true;
   bool _isFetchingCurrentLocation = false;
@@ -226,6 +247,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   JobSite? _candidateSite;
   JobSite? _pendingSite;
   int _promptCountdown = 0;
+  final Map<String, DateTime> _outOfGeofenceSince = <String, DateTime>{};
 
   bool _isLoadingBatteryUsage = false;
   bool _usageAccessGranted = false;
@@ -240,7 +262,42 @@ class _ScenarioPageState extends State<ScenarioPage> {
     unawaited(_loadDebugMode());
     unawaited(_loadPollingPreferences());
     unawaited(_loadUnitPreference());
+    unawaited(_loadTrackingPreference());
     unawaited(_loadSites());
+  }
+
+  Future<void> _loadTrackingPreference() async {
+    try {
+      final String? raw = await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _trackingEnabledPreferenceKey},
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _trackingEnabledPreference = raw != 'false';
+        _trackingPreferenceLoaded = true;
+      });
+    } catch (_) {
+      _trackingPreferenceLoaded = true;
+    }
+    _maybeAutoStartTracking();
+  }
+
+  Future<void> _saveTrackingPreference(bool enabled) async {
+    _trackingEnabledPreference = enabled;
+    try {
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _trackingEnabledPreferenceKey,
+          'value': enabled.toString(),
+        },
+      );
+    } catch (_) {
+      // Keep local preference value if persistence fails.
+    }
   }
 
   Future<void> _loadDebugMode() async {
@@ -304,6 +361,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
         'loadPreference',
         <String, dynamic>{'key': _farDistanceMetersPreferenceKey},
       );
+      final String? retriggerMinutesRaw =
+          await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{
+          'key': _outOfGeofenceRetriggerMinutesPreferenceKey,
+        },
+      );
       final String? hideNearestRaw =
           await _locationChannel.invokeMethod<String>(
         'loadPreference',
@@ -316,6 +380,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
           int.tryParse(farRaw ?? '') ?? _defaultFarPollSeconds;
       final int parsedDistance = int.tryParse(distanceRaw ?? '') ??
           _defaultFarDistanceMeters;
+        final int parsedRetriggerMinutes =
+          int.tryParse(retriggerMinutesRaw ?? '') ??
+            _defaultOutOfGeofenceRetriggerMinutes;
 
       if (!mounted) {
         return;
@@ -331,6 +398,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _farDistanceMeters = _farDistanceMeterOptions.contains(parsedDistance)
             ? parsedDistance
             : _defaultFarDistanceMeters;
+        _outOfGeofenceRetriggerMinutes =
+          _outOfGeofenceRetriggerMinuteOptions
+              .contains(parsedRetriggerMinutes)
+            ? parsedRetriggerMinutes
+            : _defaultOutOfGeofenceRetriggerMinutes;
         _hideNearestWhenFar = hideNearestRaw != 'false';
       });
     } catch (_) {
@@ -359,6 +431,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
         <String, dynamic>{
           'key': _farDistanceMetersPreferenceKey,
           'value': _farDistanceMeters.toString(),
+        },
+      );
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _outOfGeofenceRetriggerMinutesPreferenceKey,
+          'value': _outOfGeofenceRetriggerMinutes.toString(),
         },
       );
       await _locationChannel.invokeMethod<void>(
@@ -553,6 +632,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         });
         await _loadBackgroundLogs();
         await _saveSites();
+        _maybeAutoStartTracking();
         return;
       }
 
@@ -583,6 +663,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         });
       }
       await _loadBackgroundLogs();
+      _maybeAutoStartTracking();
     } catch (_) {
       if (!mounted) {
         return;
@@ -593,6 +674,60 @@ class _ScenarioPageState extends State<ScenarioPage> {
           ..addAll(_defaultSites());
       });
       await _loadBackgroundLogs();
+      _maybeAutoStartTracking();
+    }
+  }
+
+  void _maybeAutoStartTracking() {
+    if (_autoStartTrackingAttempted || !mounted || !_trackingPreferenceLoaded) {
+      return;
+    }
+    _autoStartTrackingAttempted = true;
+    unawaited(_attemptAutoStartTracking());
+  }
+
+  Future<void> _attemptAutoStartTracking() async {
+    if (_trackingEnabledPreference) {
+      await _startScenario();
+    }
+    if (!mounted || _isTracking || _trackingOffStartupDialogShown) {
+      return;
+    }
+    _trackingOffStartupDialogShown = true;
+    await _showTrackingOffStartupDialog();
+  }
+
+  Future<void> _showTrackingOffStartupDialog() async {
+    final bool? openSettings = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Tracking Is Off'),
+          content: const Text(
+            'Tracking is currently off.\n\n'
+            'To turn it on:\n'
+            '1. Open the Settings tab.\n'
+            '2. In Tracking Controls, switch Tracking On.\n'
+            '3. Allow location permissions and location services if prompted.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Open Settings'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (openSettings == true && mounted) {
+      setState(() {
+        _selectedTabIndex = 2;
+      });
     }
   }
 
@@ -868,6 +1003,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     _sessionLoggedAddresses.clear();
     _dwellMinutes.clear();
+    _outOfGeofenceSince.clear();
     _stableSamples = 0;
     _candidateSite = null;
     _pendingSite = null;
@@ -880,6 +1016,51 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     _scheduleNextPoll(immediate: true);
     setState(() {});
+  }
+
+  Future<bool> _confirmStopTracking() async {
+    if (!mounted) {
+      return false;
+    }
+    final bool? shouldStop = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Stop Tracking?'),
+          content: const Text('Are you sure you want to turn tracking off?'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Turn Off'),
+            ),
+          ],
+        );
+      },
+    );
+    return shouldStop == true;
+  }
+
+  Future<void> _onTrackingToggleChanged(bool enabled) async {
+    if (enabled) {
+      await _saveTrackingPreference(true);
+      await _startScenario();
+      return;
+    }
+
+    await _saveTrackingPreference(false);
+
+    if (!_isTracking) {
+      return;
+    }
+
+    final bool shouldStop = await _confirmStopTracking();
+    if (shouldStop) {
+      _stopScenario();
+    }
   }
 
   Future<bool> _ensureLocationAccess() async {
@@ -1120,6 +1301,34 @@ class _ScenarioPageState extends State<ScenarioPage> {
     );
     final bool inGeofence = nearest.distanceMeters <= effectiveRadius;
 
+    // Track how long previously-logged sites have stayed outside geofence.
+    for (final String address in _sessionLoggedAddresses.toList()) {
+      JobSite? loggedSite;
+      for (final JobSite site in _sites) {
+        if (site.address == address) {
+          loggedSite = site;
+          break;
+        }
+      }
+      if (loggedSite == null) {
+        continue;
+      }
+
+      final double distanceToLoggedSite = _distanceMeters(
+        fix.lat,
+        fix.lng,
+        loggedSite.lat,
+        loggedSite.lng,
+      );
+      final bool outsideLoggedSite = distanceToLoggedSite > effectiveRadius;
+
+      if (outsideLoggedSite) {
+        _outOfGeofenceSince.putIfAbsent(address, () => now);
+      } else {
+        _outOfGeofenceSince.remove(address);
+      }
+    }
+
     if (inGeofence) {
       _stableSamples += 1;
       _candidateSite = nearest.site;
@@ -1133,8 +1342,22 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     if (_candidateSite != null && _pendingSite == null) {
       final double dwell = _dwellMinutes[_candidateSite!.address] ?? 0;
-      final bool alreadyLogged =
+      bool alreadyLogged =
           _sessionLoggedAddresses.contains(_candidateSite!.address);
+
+      if (alreadyLogged) {
+        final DateTime? outSince =
+            _outOfGeofenceSince[_candidateSite!.address];
+        if (outSince != null) {
+          final int outsideMinutes =
+              now.difference(outSince).inMinutes;
+          if (outsideMinutes >= _outOfGeofenceRetriggerMinutes) {
+            _sessionLoggedAddresses.remove(_candidateSite!.address);
+            _outOfGeofenceSince.remove(_candidateSite!.address);
+            alreadyLogged = false;
+          }
+        }
+      }
 
       if (!alreadyLogged &&
           dwell >= _candidateSite!.requiredDwellMinutes.toDouble() &&
@@ -1207,6 +1430,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     setState(() {
       _sessionLoggedAddresses.add(site.address);
+      _outOfGeofenceSince.remove(site.address);
       _pendingSite = null;
       _promptCountdown = 0;
       _status = autoLogged
@@ -2362,26 +2586,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: <Widget>[
-                    FilledButton.icon(
-                      onPressed: _isTracking ? null : _startScenario,
-                      icon: const Icon(Icons.play_arrow),
-                      label: const Text('Start Tracking'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _isTracking ? _stopScenario : null,
-                      icon: const Icon(Icons.stop),
-                      label: const Text('Stop Tracking'),
-                    ),
-                  ],
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Tracking On'),
+                  subtitle: Text(_isTracking
+                      ? 'Tracking is active.'
+                      : 'Tracking is stopped.'),
+                  value: _isTracking,
+                  onChanged: (bool value) {
+                    unawaited(_onTrackingToggleChanged(value));
+                  },
                 ),
-                const SizedBox(height: 10),
-                Text(_isTracking
-                    ? 'Tracking is active.'
-                    : 'Tracking is stopped.'),
                 const SizedBox(height: 10),
                 Text(
                   _isTracking
@@ -2487,6 +2702,34 @@ class _ScenarioPageState extends State<ScenarioPage> {
                     if (_isTracking) {
                       _scheduleNextPoll(immediate: true);
                     }
+                    _refreshNearestUiFromCurrentFix();
+                  },
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int>(
+                  initialValue: _outOfGeofenceRetriggerMinutes,
+                  decoration: const InputDecoration(
+                    labelText: 'Out-of-geofence retrigger',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: _outOfGeofenceRetriggerMinuteOptions
+                      .map(
+                        (int value) => DropdownMenuItem<int>(
+                          value: value,
+                          child: Text(
+                            value == 60 ? '1 hr' : '$value min',
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (int? value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setState(() {
+                      _outOfGeofenceRetriggerMinutes = value;
+                    });
+                    unawaited(_savePollingPreferences());
                     _refreshNearestUiFromCurrentFix();
                   },
                 ),
