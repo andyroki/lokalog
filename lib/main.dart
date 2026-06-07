@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
 
 void main() {
   runApp(const LokaLogApp());
@@ -254,6 +255,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   bool _isLoadingBatteryUsage = false;
   bool _usageAccessGranted = false;
+  String _appVersionLabel = 'Loading...';
   String? _batteryUsageError;
   int? _deviceBatteryLevel;
   DateTime? _batteryUsageFetchedAt;
@@ -267,6 +269,26 @@ class _ScenarioPageState extends State<ScenarioPage> {
     unawaited(_loadUnitPreference());
     unawaited(_loadTrackingPreference());
     unawaited(_loadSites());
+    unawaited(_loadAppVersion());
+  }
+
+  Future<void> _loadAppVersion() async {
+    try {
+      final PackageInfo info = await PackageInfo.fromPlatform();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _appVersionLabel = '${info.version} (${info.buildNumber})';
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _appVersionLabel = 'Unavailable';
+      });
+    }
   }
 
   Future<void> _loadTrackingPreference() async {
@@ -1489,6 +1511,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   void _debugRetriggerCurrentSite() {
     if (_pendingSite != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('A log reminder is already active.')),
+        );
+      }
       setState(() {
         _status = 'A log reminder is already active.';
       });
@@ -1497,58 +1524,28 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     final LocationFix? fix = _currentFix;
     if (fix == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No GPS fix yet. Wait for location first.'),
+          ),
+        );
+      }
       setState(() {
-        _status = 'No GPS fix yet. Wait for location before retrigger check.';
+        _status = 'No GPS fix yet. Wait for location before retrigger.';
       });
       return;
     }
 
     final JobSite? site = _candidateSite ?? _latestNearest?.site;
     if (site == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No nearby site available to retrigger.')),
+        );
+      }
       setState(() {
         _status = 'No nearby site available to retrigger.';
-      });
-      return;
-    }
-
-    final bool alreadyLogged = _sessionLoggedAddresses.contains(site.address);
-    if (!alreadyLogged) {
-      setState(() {
-        _status = 'Site is already eligible to log again: ${site.address}.';
-      });
-      return;
-    }
-
-    final double effectiveRadius = max(
-      _matchRadiusMeters,
-      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
-    );
-    final double distanceToSite = _distanceMeters(
-      fix.lat,
-      fix.lng,
-      site.lat,
-      site.lng,
-    );
-    final bool outsideGeofence = distanceToSite > effectiveRadius;
-
-    if (!outsideGeofence) {
-      _outOfGeofenceSince.remove(site.address);
-      setState(() {
-        _status =
-            'Still inside geofence for ${site.address}. Leave geofence for ${_outOfGeofenceRetriggerMinutes} min to retrigger.';
-      });
-      return;
-    }
-
-    final DateTime now = DateTime.now();
-    final DateTime outSince =
-        _outOfGeofenceSince.putIfAbsent(site.address, () => now);
-    final int outsideMinutes = now.difference(outSince).inMinutes;
-
-    if (outsideMinutes < _outOfGeofenceRetriggerMinutes) {
-      setState(() {
-        _status =
-            'Outside geofence for $outsideMinutes/${_outOfGeofenceRetriggerMinutes} min for ${site.address}. Keep waiting to retrigger.';
       });
       return;
     }
@@ -1556,20 +1553,25 @@ class _ScenarioPageState extends State<ScenarioPage> {
     setState(() {
       _sessionLoggedAddresses.remove(site.address);
       _outOfGeofenceSince.remove(site.address);
+      _dwellMinutes[site.address] = 0;
+      _stableSamples = 0;
+      _candidateSite = site;
       _status =
-          'Retrigger unlocked for ${site.address}. Ready to log again when eligible.';
+          'Retrigger restarted for ${site.address}. Stay in geofence for ${site.requiredDwellMinutes} min to log again.';
     });
 
-    final bool canPromptNow =
-        _pendingSite == null &&
-        _candidateSite != null &&
-        _candidateSite!.address == site.address &&
-        (_dwellMinutes[site.address] ?? 0) >=
-            site.requiredDwellMinutes.toDouble() &&
-        _stableSamples >= _requiredStableSamples;
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Timer restarted for ${site.name}. Dwell will build from 0.',
+          ),
+        ),
+      );
+    }
 
-    if (canPromptNow) {
-      _showConfirmationPrompt(site);
+    if (_isTracking) {
+      _scheduleNextPoll(immediate: true);
     }
   }
 
@@ -2457,6 +2459,92 @@ class _ScenarioPageState extends State<ScenarioPage> {
     );
   }
 
+  Future<bool> _confirmAddLocationAction({required bool useCurrentLocation}) async {
+    final bool? shouldContinue = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Add Location?'),
+          content: Text(
+            useCurrentLocation
+                ? 'Are you sure you want to add a location from current GPS?'
+                : 'Are you sure you want to add a new location?',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Continue'),
+            ),
+          ],
+        );
+      },
+    );
+    return shouldContinue == true;
+  }
+
+  Future<void> _onResetAllSites() async {
+    if (_sites.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No sites to reset.')),
+      );
+      return;
+    }
+
+    final bool? shouldReset = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Reset All Sites?'),
+          content: const Text(
+            'This will remove all saved locations. Are you sure?',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Reset All'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldReset != true || !mounted) {
+      return;
+    }
+
+    if (_isTracking) {
+      _stopScenario();
+    }
+
+    setState(() {
+      _sites.clear();
+      _latestNearest = null;
+      _candidateSite = null;
+      _pendingSite = null;
+      _promptCountdown = 0;
+      _dwellMinutes.clear();
+      _sessionLoggedAddresses.clear();
+      _outOfGeofenceSince.clear();
+      _status = 'All locations were reset. Add locations from the Locations tab.';
+    });
+
+    unawaited(_saveSites());
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('All saved locations were reset.')),
+    );
+  }
+
   Future<void> _onDeleteLogEntry(int index, JobLog log) async {
     final bool? confirmDelete = await showDialog<bool>(
       context: context,
@@ -3043,9 +3131,20 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
-        const Text(
-          'Locations',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        Row(
+          children: <Widget>[
+            const Expanded(
+              child: Text(
+                'Locations',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _onResetAllSites,
+              icon: const Icon(Icons.restart_alt),
+              label: const Text('Reset All'),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         if (_sites.isEmpty)
@@ -3095,6 +3194,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
       padding: const EdgeInsets.all(16),
       children: <Widget>[
         Card(
+          child: ListTile(
+            title: const Text('App Version'),
+            subtitle: Text(_appVersionLabel),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
           child: SwitchListTile(
             title: const Text('Show Battery Info'),
             subtitle: const Text('Show or hide battery diagnostics below.'),
@@ -3126,7 +3232,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Apply the same out-of-geofence retrigger rule used by normal logging.',
+                  'Reset dwell timing for the nearest site so it can log again after required in-geofence time.',
                 ),
                 const SizedBox(height: 10),
                 FilledButton.icon(
@@ -3316,7 +3422,16 @@ class _ScenarioPageState extends State<ScenarioPage> {
                   onPressed: _sites.length >= _maxSavedLocations ||
                           _isFetchingCurrentLocation
                       ? null
-                      : _onAddFromCurrentLocation,
+                      : () async {
+                          final bool shouldContinue =
+                              await _confirmAddLocationAction(
+                            useCurrentLocation: true,
+                          );
+                          if (!shouldContinue) {
+                            return;
+                          }
+                          await _onAddFromCurrentLocation();
+                        },
                   icon: _isFetchingCurrentLocation
                       ? const SizedBox(
                           width: 16,
@@ -3330,7 +3445,16 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 FloatingActionButton.extended(
                   onPressed: _sites.length >= _maxSavedLocations
                       ? null
-                      : _onAddNewLocation,
+                      : () async {
+                          final bool shouldContinue =
+                              await _confirmAddLocationAction(
+                            useCurrentLocation: false,
+                          );
+                          if (!shouldContinue) {
+                            return;
+                          }
+                          await _onAddNewLocation();
+                        },
                   icon: const Icon(Icons.add_location_alt),
                   label: Text(
                     _sites.length >= _maxSavedLocations
