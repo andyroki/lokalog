@@ -37,10 +37,10 @@ flutter run -d R5GL234YAGT
 
 ```release 
 
-flutter build apk --release
+flutter build apk --release --dart-define=BUILD_DATE=$(Get-Date -Format yyyy-MM-dd) --dart-define=BUILD_TIME=$(Get-Date -Format HH:mm:ss)
 location build\app\outputs\flutter-apk\app-release.apk
 ```
 
 ```app store
-flutter build appbundle --release
+flutter build appbundle --release --dart-define=BUILD_DATE=$(Get-Date -Format yyyy-MM-dd) --dart-define=BUILD_TIME=$(Get-Date -Format HH:mm:ss)
 build/app/outputs/bundle/release/app-release.aab

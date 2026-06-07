@@ -6,9 +6,9 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:package_info_plus/package_info_plus.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const LokaLogApp());
 }
 
@@ -219,7 +219,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
   final Set<String> _deletedLogKeys = <String>{};
   final Set<String> _sessionLoggedAddresses = <String>{};
   final Map<String, double> _dwellMinutes = <String, double>{};
-  final TextEditingController _logNoteController = TextEditingController();
   bool _deletedLogKeysLoaded = false;
   bool _autoStartTrackingAttempted = false;
   bool _trackingOffStartupDialogShown = false;
@@ -255,7 +254,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   bool _isLoadingBatteryUsage = false;
   bool _usageAccessGranted = false;
-  String _appVersionLabel = 'Loading...';
+  static const String _fallbackVersion =
+      String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
+  static const String _fallbackBuildNumber =
+      String.fromEnvironment('APP_BUILD_NUMBER', defaultValue: '1');
+  String _appVersionLabel = '$_fallbackVersion ($_fallbackBuildNumber)';
   String? _batteryUsageError;
   int? _deviceBatteryLevel;
   DateTime? _batteryUsageFetchedAt;
@@ -264,31 +267,32 @@ class _ScenarioPageState extends State<ScenarioPage> {
   @override
   void initState() {
     super.initState();
+    _initializeAppVersionLabel();
     unawaited(_loadDebugMode());
     unawaited(_loadPollingPreferences());
     unawaited(_loadUnitPreference());
     unawaited(_loadTrackingPreference());
     unawaited(_loadSites());
-    unawaited(_loadAppVersion());
   }
 
-  Future<void> _loadAppVersion() async {
-    try {
-      final PackageInfo info = await PackageInfo.fromPlatform();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _appVersionLabel = '${info.version} (${info.buildNumber})';
-      });
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _appVersionLabel = 'Unavailable';
-      });
+  void _initializeAppVersionLabel() {
+    const String buildDate =
+        String.fromEnvironment('BUILD_DATE', defaultValue: '');
+    const String buildTime =
+        String.fromEnvironment('BUILD_TIME', defaultValue: '');
+
+    final List<String> stampParts = <String>[
+      buildDate.trim(),
+      buildTime.trim(),
+    ].where((String value) => value.isNotEmpty).toList();
+
+    if (stampParts.isEmpty) {
+      _appVersionLabel = '$_fallbackVersion ($_fallbackBuildNumber)';
+      return;
     }
+
+    _appVersionLabel =
+        '$_fallbackVersion ($_fallbackBuildNumber) | Built: ${stampParts.join(' ')}';
   }
 
   Future<void> _loadTrackingPreference() async {
@@ -1029,7 +1033,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
   void dispose() {
     _trackingTimer?.cancel();
     _promptTimer?.cancel();
-    _logNoteController.dispose();
     super.dispose();
   }
 
@@ -1427,7 +1430,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
   void _showConfirmationPrompt(JobSite site) {
     _pendingSite = site;
     _promptCountdown = 12;
-    _logNoteController.clear();
     _promptTimer?.cancel();
     unawaited(_showLogReminderNotification(site, _promptCountdown));
     _promptTimer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
@@ -1440,12 +1442,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         return;
       }
       if (_promptCountdown <= 1) {
-        _logJob(
-          site,
-          confirmedByUser: false,
-          autoLogged: true,
-          notes: _logNoteController.text,
-        );
+        _logJob(site, confirmedByUser: false, autoLogged: true);
         timer.cancel();
       } else {
         setState(() {
@@ -1505,7 +1502,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
           ? 'No response received. Job auto-logged for ${site.address}.'
           : 'Job confirmed and logged for ${site.address}.';
     });
-    _logNoteController.clear();
     unawaited(_cancelLogReminderNotification());
   }
 
@@ -2706,17 +2702,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  TextField(
-                    controller: _logNoteController,
-                    minLines: 1,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: 'Notes (optional)',
-                      hintText: 'Gate locked, customer requested callback... ',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
                   Row(
                     children: <Widget>[
                       TextButton(
@@ -2734,7 +2719,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
                             site,
                             confirmedByUser: true,
                             autoLogged: false,
-                            notes: _logNoteController.text,
                           );
                         },
                         icon: const Icon(Icons.check_circle_outline),
