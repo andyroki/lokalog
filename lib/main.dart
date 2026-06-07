@@ -1556,12 +1556,21 @@ class _ScenarioPageState extends State<ScenarioPage> {
     setState(() {
       _sessionLoggedAddresses.remove(site.address);
       _outOfGeofenceSince.remove(site.address);
-      _dwellMinutes[site.address] = 0;
-      _stableSamples = 0;
-      _candidateSite = null;
       _status =
-          'Retrigger unlocked for ${site.address}. Re-enter geofence and dwell to log again.';
+          'Retrigger unlocked for ${site.address}. Ready to log again when eligible.';
     });
+
+    final bool canPromptNow =
+        _pendingSite == null &&
+        _candidateSite != null &&
+        _candidateSite!.address == site.address &&
+        (_dwellMinutes[site.address] ?? 0) >=
+            site.requiredDwellMinutes.toDouble() &&
+        _stableSamples >= _requiredStableSamples;
+
+    if (canPromptNow) {
+      _showConfirmationPrompt(site);
+    }
   }
 
   double _confidenceScore(LocationFix fix, JobSite site) {
@@ -1935,10 +1944,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
       setState(() {
         _sites.add(newSite);
-        _status =
-            'Added location: ${newSite.name} at ${newSite.address} (${result.requiredMinutes}m).';
       });
       unawaited(_saveSites());
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Added location: ${newSite.name} (${result.requiredMinutes}m).',
+          ),
+        ),
+      );
       return;
     }
   }
@@ -2316,10 +2330,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
       setState(() {
         _sites.add(newSite);
         _isFetchingCurrentLocation = false;
-        _status =
-            'Added location from current GPS: ${newSite.name} at ${newSite.address} (${result.requiredMinutes}m).';
       });
       unawaited(_saveSites());
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Added location from current GPS: ${newSite.name} (${result.requiredMinutes}m).',
+          ),
+        ),
+      );
       return;
     }
   }
@@ -2391,10 +2410,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
       setState(() {
         _sites[index] = updatedSite;
-        _status =
-            'Updated location: ${updatedSite.name} at ${updatedSite.address} (${result.requiredMinutes}m).';
       });
       unawaited(_saveSites());
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Updated location: ${updatedSite.name} (${result.requiredMinutes}m).',
+          ),
+        ),
+      );
       return;
     }
   }
@@ -2426,9 +2450,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     setState(() {
       _sites.removeAt(index);
-      _status = 'Deleted location: ${site.name}.';
     });
     unawaited(_saveSites());
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Deleted location: ${site.name}.')),
+    );
   }
 
   Future<void> _onDeleteLogEntry(int index, JobLog log) async {
@@ -2481,6 +2507,55 @@ class _ScenarioPageState extends State<ScenarioPage> {
     } on PlatformException {
       // Keep local delete behavior even if persistence fails.
     }
+  }
+
+  Future<void> _onEditLogEntry(int index, JobLog log) async {
+    String draftNotes = log.notes;
+
+    final String? updatedNotes = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Edit Log Notes'),
+          content: TextFormField(
+            initialValue: draftNotes,
+            onChanged: (String value) {
+              draftNotes = value;
+            },
+            minLines: 3,
+            maxLines: 6,
+            decoration: const InputDecoration(
+              labelText: 'Notes',
+              hintText: 'Add any details for this log entry...',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(draftNotes.trim()),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (updatedNotes == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _logs[index] = log.copyWith(notes: updatedNotes);
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Log notes updated.')),
+    );
   }
 
   Widget _buildLogScreen() {
@@ -2630,6 +2705,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       tooltip: 'Share log',
                       onPressed: () => _shareLogEntry(log),
                       icon: const Icon(Icons.share),
+                    ),
+                    IconButton(
+                      tooltip: 'Edit log notes',
+                      onPressed: () => _onEditLogEntry(index, log),
+                      icon: const Icon(Icons.edit_note),
                     ),
                     IconButton(
                       tooltip: 'Delete log',
@@ -3410,6 +3490,30 @@ class JobLog {
   final bool confirmedByUser;
   final bool autoLogged;
   final DateTime timestamp;
+
+  JobLog copyWith({
+    String? name,
+    String? address,
+    String? notes,
+    double? lat,
+    double? lng,
+    double? confidence,
+    bool? confirmedByUser,
+    bool? autoLogged,
+    DateTime? timestamp,
+  }) {
+    return JobLog(
+      name: name ?? this.name,
+      address: address ?? this.address,
+      notes: notes ?? this.notes,
+      lat: lat ?? this.lat,
+      lng: lng ?? this.lng,
+      confidence: confidence ?? this.confidence,
+      confirmedByUser: confirmedByUser ?? this.confirmedByUser,
+      autoLogged: autoLogged ?? this.autoLogged,
+      timestamp: timestamp ?? this.timestamp,
+    );
+  }
 }
 
 class _AddLocationInput {
