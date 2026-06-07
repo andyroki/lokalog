@@ -1344,7 +1344,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final bool outsideLoggedSite = distanceToLoggedSite > effectiveRadius;
 
       if (outsideLoggedSite) {
-        _outOfGeofenceSince.putIfAbsent(address, () => now);
+        final DateTime outSince =
+            _outOfGeofenceSince.putIfAbsent(address, () => now);
+        final int outsideMinutes = now.difference(outSince).inMinutes;
+        if (outsideMinutes >= _outOfGeofenceRetriggerMinutes) {
+          _sessionLoggedAddresses.remove(address);
+          _outOfGeofenceSince.remove(address);
+          // Start dwell from zero after enough time outside geofence.
+          _dwellMinutes[address] = 0;
+        }
       } else {
         _outOfGeofenceSince.remove(address);
       }
@@ -1363,22 +1371,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     if (_candidateSite != null && _pendingSite == null) {
       final double dwell = _dwellMinutes[_candidateSite!.address] ?? 0;
-      bool alreadyLogged =
+      final bool alreadyLogged =
           _sessionLoggedAddresses.contains(_candidateSite!.address);
-
-      if (alreadyLogged) {
-        final DateTime? outSince =
-            _outOfGeofenceSince[_candidateSite!.address];
-        if (outSince != null) {
-          final int outsideMinutes =
-              now.difference(outSince).inMinutes;
-          if (outsideMinutes >= _outOfGeofenceRetriggerMinutes) {
-            _sessionLoggedAddresses.remove(_candidateSite!.address);
-            _outOfGeofenceSince.remove(_candidateSite!.address);
-            alreadyLogged = false;
-          }
-        }
-      }
 
       if (!alreadyLogged &&
           dwell >= _candidateSite!.requiredDwellMinutes.toDouble() &&
