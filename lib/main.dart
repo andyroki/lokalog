@@ -218,6 +218,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   final Set<String> _deletedLogKeys = <String>{};
   final Set<String> _sessionLoggedAddresses = <String>{};
   final Map<String, double> _dwellMinutes = <String, double>{};
+  final TextEditingController _logNoteController = TextEditingController();
   bool _deletedLogKeysLoaded = false;
   bool _autoStartTrackingAttempted = false;
   bool _trackingOffStartupDialogShown = false;
@@ -904,6 +905,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
           name: (item['name'] ?? item['siteName'] ?? item['address'] ?? '')
             .toString(),
           address: (item['address'] ?? '').toString(),
+          notes: (item['notes'] ?? '').toString(),
           lat: ((item['lat'] as num?)?.toDouble() ?? 0),
           lng: ((item['lng'] as num?)?.toDouble() ?? 0),
           confidence: ((item['confidence'] as num?)?.toDouble() ?? 100),
@@ -1005,6 +1007,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   void dispose() {
     _trackingTimer?.cancel();
     _promptTimer?.cancel();
+    _logNoteController.dispose();
     super.dispose();
   }
 
@@ -1402,19 +1405,44 @@ class _ScenarioPageState extends State<ScenarioPage> {
   void _showConfirmationPrompt(JobSite site) {
     _pendingSite = site;
     _promptCountdown = 12;
+    _logNoteController.clear();
     _promptTimer?.cancel();
     unawaited(_showLogReminderNotification(site, _promptCountdown));
     _promptTimer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
       if (_pendingSite == null) {
         timer.cancel();
         return;
       }
       if (_promptCountdown <= 1) {
-        _logJob(site, confirmedByUser: false, autoLogged: true);
+        _logJob(
+          site,
+          confirmedByUser: false,
+          autoLogged: true,
+          notes: _logNoteController.text,
+        );
         timer.cancel();
       } else {
-        _promptCountdown -= 1;
+        setState(() {
+          _promptCountdown -= 1;
+        });
       }
+    });
+  }
+
+  void _dismissPendingPrompt() {
+    if (_pendingSite == null) {
+      return;
+    }
+    _promptTimer?.cancel();
+    unawaited(_cancelLogReminderNotification());
+    setState(() {
+      _pendingSite = null;
+      _promptCountdown = 0;
+      _status = 'Log reminder dismissed.';
     });
   }
 
@@ -1422,17 +1450,21 @@ class _ScenarioPageState extends State<ScenarioPage> {
     JobSite site, {
     required bool confirmedByUser,
     required bool autoLogged,
+    String notes = '',
   }) {
     final LocationFix? fix = _currentFix;
     if (fix == null) {
       return;
     }
 
+    final String cleanNotes = notes.trim();
+
     _logs.insert(
       0,
       JobLog(
         name: site.name,
         address: site.address,
+        notes: cleanNotes,
         lat: fix.lat,
         lng: fix.lng,
         confidence: _confidenceScore(fix, site),
@@ -1451,6 +1483,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
           ? 'No response received. Job auto-logged for ${site.address}.'
           : 'Job confirmed and logged for ${site.address}.';
     });
+    _logNoteController.clear();
     unawaited(_cancelLogReminderNotification());
   }
 
@@ -1458,6 +1491,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (_pendingSite != null) {
       setState(() {
         _status = 'A log reminder is already active.';
+      });
+      return;
+    }
+
+    final LocationFix? fix = _currentFix;
+    if (fix == null) {
+      setState(() {
+        _status = 'No GPS fix yet. Wait for location before retrigger check.';
       });
       return;
     }
@@ -1470,18 +1511,57 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return;
     }
 
+    final bool alreadyLogged = _sessionLoggedAddresses.contains(site.address);
+    if (!alreadyLogged) {
+      setState(() {
+        _status = 'Site is already eligible to log again: ${site.address}.';
+      });
+      return;
+    }
+
+    final double effectiveRadius = max(
+      _matchRadiusMeters,
+      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+    );
+    final double distanceToSite = _distanceMeters(
+      fix.lat,
+      fix.lng,
+      site.lat,
+      site.lng,
+    );
+    final bool outsideGeofence = distanceToSite > effectiveRadius;
+
+    if (!outsideGeofence) {
+      _outOfGeofenceSince.remove(site.address);
+      setState(() {
+        _status =
+            'Still inside geofence for ${site.address}. Leave geofence for ${_outOfGeofenceRetriggerMinutes} min to retrigger.';
+      });
+      return;
+    }
+
+    final DateTime now = DateTime.now();
+    final DateTime outSince =
+        _outOfGeofenceSince.putIfAbsent(site.address, () => now);
+    final int outsideMinutes = now.difference(outSince).inMinutes;
+
+    if (outsideMinutes < _outOfGeofenceRetriggerMinutes) {
+      setState(() {
+        _status =
+            'Outside geofence for $outsideMinutes/${_outOfGeofenceRetriggerMinutes} min for ${site.address}. Keep waiting to retrigger.';
+      });
+      return;
+    }
+
     setState(() {
       _sessionLoggedAddresses.remove(site.address);
       _outOfGeofenceSince.remove(site.address);
-      _stableSamples = max(_stableSamples, _requiredStableSamples);
-      _dwellMinutes[site.address] = max(
-        _dwellMinutes[site.address] ?? 0,
-        site.requiredDwellMinutes.toDouble(),
-      );
-      _status = 'Debug retrigger armed for ${site.address}.';
+      _dwellMinutes[site.address] = 0;
+      _stableSamples = 0;
+      _candidateSite = null;
+      _status =
+          'Retrigger unlocked for ${site.address}. Re-enter geofence and dwell to log again.';
     });
-
-    _showConfirmationPrompt(site);
   }
 
   double _confidenceScore(LocationFix fix, JobSite site) {
@@ -1628,11 +1708,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   String _buildShareTextForLog(JobLog log) {
     final String clientName = log.name.trim().isEmpty ? 'Client' : log.name;
+    final String notesLine =
+      log.notes.trim().isEmpty ? '' : 'Notes: ${log.notes.trim()}\n';
     return 'Lokalog Job Log\n'
         'Customer: $clientName\n'
         'Address: ${log.address}\n'
         'Time: ${_formatLogTimestamp(log.timestamp)}\n'
         'Confidence: ${log.confidence.toStringAsFixed(1)}%\n'
+      '$notesLine'
         'Type: ${log.confirmedByUser ? 'confirmed' : 'auto-logged'}';
   }
 
@@ -2437,6 +2520,69 @@ class _ScenarioPageState extends State<ScenarioPage> {
               ),
             ),
           ),
+        if (_pendingSite != null)
+          Card(
+            color: Theme.of(context).colorScheme.tertiaryContainer,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'Ready to log ${_pendingSite!.name}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: Theme.of(context).colorScheme.onTertiaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Auto-log in ${_promptCountdown}s',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onTertiaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _logNoteController,
+                    minLines: 1,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'Notes (optional)',
+                      hintText: 'Gate locked, customer requested callback... ',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: <Widget>[
+                      TextButton(
+                        onPressed: _dismissPendingPrompt,
+                        child: const Text('Dismiss'),
+                      ),
+                      const Spacer(),
+                      FilledButton.icon(
+                        onPressed: () {
+                          final JobSite? site = _pendingSite;
+                          if (site == null) {
+                            return;
+                          }
+                          _logJob(
+                            site,
+                            confirmedByUser: true,
+                            autoLogged: false,
+                            notes: _logNoteController.text,
+                          );
+                        },
+                        icon: const Icon(Icons.check_circle_outline),
+                        label: const Text('Log Now'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
         const SizedBox(height: 16),
         Row(
           children: <Widget>[
@@ -2463,6 +2609,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
             final String clientName =
                 log.name.trim().isEmpty ? 'Client' : log.name.trim();
             final String address = log.address.trim();
+            final String notes = log.notes.trim();
             final bool showAddressLine =
                 address.isNotEmpty && address != clientName;
             return Card(
@@ -2472,7 +2619,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
                   '${showAddressLine ? '$address\n' : ''}'
                   '${_formatLogTimestamp(log.timestamp)}\n'
                   'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
-                  '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}',
+                  '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}'
+                  '${notes.isEmpty ? '' : '\nNotes: $notes'}',
                 ),
                 isThreeLine: showAddressLine,
                 trailing: Row(
@@ -2898,7 +3046,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Force a new log attempt for the current or nearest site without leaving geofence.',
+                  'Apply the same out-of-geofence retrigger rule used by normal logging.',
                 ),
                 const SizedBox(height: 10),
                 FilledButton.icon(
@@ -3244,6 +3392,7 @@ class JobLog {
   JobLog({
     required this.name,
     required this.address,
+    this.notes = '',
     required this.lat,
     required this.lng,
     required this.confidence,
@@ -3254,6 +3403,7 @@ class JobLog {
 
   final String name;
   final String address;
+  final String notes;
   final double lat;
   final double lng;
   final double confidence;
