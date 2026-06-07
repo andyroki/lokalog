@@ -222,6 +222,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   bool _autoStartTrackingAttempted = false;
   bool _trackingOffStartupDialogShown = false;
   bool _trackingPreferenceLoaded = false;
+  bool _sitesLoaded = false;
   bool _trackingEnabledPreference = true;
 
   Timer? _trackingTimer;
@@ -630,6 +631,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
           _sites
             ..clear()
             ..addAll(defaults);
+          _sitesLoaded = true;
         });
         await _loadBackgroundLogs();
         await _saveSites();
@@ -639,6 +641,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
       final dynamic decoded = jsonDecode(raw);
       if (decoded is! List<dynamic>) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _sites
+            ..clear()
+            ..addAll(_defaultSites());
+          _sitesLoaded = true;
+        });
+        await _loadBackgroundLogs();
+        _maybeAutoStartTracking();
         return;
       }
 
@@ -655,12 +668,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
           _sites
             ..clear()
             ..addAll(_defaultSites());
+          _sitesLoaded = true;
         });
       } else {
         setState(() {
           _sites
             ..clear()
             ..addAll(loaded);
+          _sitesLoaded = true;
         });
       }
       await _loadBackgroundLogs();
@@ -673,6 +688,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _sites
           ..clear()
           ..addAll(_defaultSites());
+        _sitesLoaded = true;
       });
       await _loadBackgroundLogs();
       _maybeAutoStartTracking();
@@ -680,7 +696,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   void _maybeAutoStartTracking() {
-    if (_autoStartTrackingAttempted || !mounted || !_trackingPreferenceLoaded) {
+    if (_autoStartTrackingAttempted ||
+        !mounted ||
+        !_trackingPreferenceLoaded ||
+        !_sitesLoaded) {
       return;
     }
     _autoStartTrackingAttempted = true;
@@ -1052,15 +1071,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return;
     }
 
-    await _saveTrackingPreference(false);
-
     if (!_isTracking) {
+      await _saveTrackingPreference(false);
       return;
     }
 
     final bool shouldStop = await _confirmStopTracking();
     if (shouldStop) {
       _stopScenario();
+      await _saveTrackingPreference(false);
     }
   }
 

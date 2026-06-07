@@ -25,8 +25,7 @@ This combination helps avoid accidental logs from noisy GPS, short stops, or pas
 ## Run
 
 ```bash
-flutter pub get
-flutter run
+flutter pub utter run
 ```
 
 To run on your connected phone:
@@ -41,3 +40,7 @@ flutter run -d R5GL234YAGT
 flutter build apk --release
 location build\app\outputs\flutter-apk\app-release.apk
 ```
+
+```app store
+flutter build appbundle --release
+build/app/outputs/bundle/release/app-release.aab
