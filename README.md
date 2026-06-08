@@ -25,7 +25,8 @@ This combination helps avoid accidental logs from noisy GPS, short stops, or pas
 ## Run
 
 ```bash
-flutter pub utter run
+flutter pub get
+flutter run
 ```
 
 To run on your connected phone:
@@ -35,12 +36,26 @@ flutter run -d ZY22L93QR9
 flutter run -d R5GL234YAGT
 ```
 
-```release 
+## Release Build (PowerShell)
 
-flutter build apk --release --dart-define=BUILD_DATE=$(Get-Date -Format yyyy-MM-dd) --dart-define=BUILD_TIME=$(Get-Date -Format HH:mm:ss)
-location build\app\outputs\flutter-apk\app-release.apk
+```powershell
+$buildDate = Get-Date -Format 'yyyy-MM-dd'
+$buildTime = Get-Date -Format 'HH:mm:ss'
+flutter build apk --release --dart-define=BUILD_DATE=$buildDate --dart-define=BUILD_TIME=$buildTime
 ```
 
-```app store
-flutter build appbundle --release --dart-define=BUILD_DATE=$(Get-Date -Format yyyy-MM-dd) --dart-define=BUILD_TIME=$(Get-Date -Format HH:mm:ss)
-build/app/outputs/bundle/release/app-release.aab
+APK output:
+
+`build/app/outputs/flutter-apk/app-release.apk`
+
+## App Bundle (Play Store, PowerShell)
+
+```powershell
+$buildDate = Get-Date -Format 'yyyy-MM-dd'
+$buildTime = Get-Date -Format 'HH:mm:ss'
+flutter build appbundle --release --dart-define=BUILD_DATE=$buildDate --dart-define=BUILD_TIME=$buildTime
+```
+
+AAB output:
+
+`build/app/outputs/bundle/release/app-release.aab`
