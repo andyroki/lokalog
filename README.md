@@ -48,6 +48,8 @@ APK output:
 
 `build/app/outputs/flutter-apk/app-release.apk`
 
+Use this APK only for direct install/testing. Do not upload APK when publishing to Google Play if you are using an AAB.
+
 ## App Bundle (Play Store, PowerShell)
 
 ```powershell
@@ -59,3 +61,8 @@ flutter build appbundle --release --dart-define=BUILD_DATE=$buildDate --dart-def
 AAB output:
 
 `build/app/outputs/bundle/release/app-release.aab`
+
+Upload only the `.aab` file to Play Console. If Play reports version conflicts, increase the build number (for example `--build-number 4`).
+
+Use this for release change build number/
+flutter build appbundle --release --build-name 1.0.1 --build-number 20 
