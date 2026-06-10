@@ -707,6 +707,80 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return 'Position polling is inactive. Close: ${_formatSecondsOption(_closePollSeconds)}, Far: ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.';
   }
 
+  List<LocationTrackingState> _buildLocationTrackingStates() {
+    final LocationFix? fix = _currentFix;
+    final DateTime now = DateTime.now();
+
+    final List<LocationTrackingState> states = _sites.map((JobSite site) {
+      final double? distanceMeters = fix == null
+          ? null
+          : _distanceMeters(fix.lat, fix.lng, site.lat, site.lng);
+
+      final bool far =
+          distanceMeters == null || distanceMeters > _farDistanceMeters;
+
+      final double effectiveRadius = fix == null
+          ? _matchRadiusMeters
+          : max(
+              _matchRadiusMeters,
+              min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+            );
+      final bool inGeofence =
+          distanceMeters != null && distanceMeters <= effectiveRadius;
+      final bool outOfGeofence =
+          distanceMeters != null && distanceMeters > effectiveRadius;
+
+      final double dwell = _dwellMinutes[site.address] ?? 0;
+      final double remaining =
+          max(0, site.requiredDwellMinutes.toDouble() - dwell);
+
+      final bool logged = _sessionLoggedAddresses.contains(site.address);
+      final bool waitingToGetLogged =
+          !logged &&
+          (_pendingSite?.address == site.address ||
+              (_candidateSite?.address == site.address && dwell > 0));
+
+      return LocationTrackingState(
+        name: site.name,
+        far: far,
+        inGeofence: inGeofence,
+        outOfGeofence: outOfGeofence,
+        logged: logged,
+        waitingToGetLogged: waitingToGetLogged,
+        dwellMinutes: dwell,
+        remainingMinutes: remaining,
+        distanceMeters: distanceMeters,
+        lastUpdatedAt: now,
+      );
+    }).toList();
+
+    states.sort((LocationTrackingState a, LocationTrackingState b) =>
+        a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+    return states;
+  }
+
+  String _locationTrackingStatesDebugSummary() {
+    final List<LocationTrackingState> states = _buildLocationTrackingStates();
+    if (states.isEmpty) {
+      return 'Location Tracking State\nNo saved locations.';
+    }
+
+    final String lines = states.map((LocationTrackingState state) {
+      final String dist = state.distanceMeters == null
+          ? 'no fix'
+          : _fmtDist(state.distanceMeters!);
+      final String dwell = state.dwellMinutes.toStringAsFixed(1);
+      final String remaining = state.remainingMinutes.toStringAsFixed(1);
+      return '${state.name}\n'
+          '  in geofence: ${state.inGeofence}  |  out: ${state.outOfGeofence}  |  far: ${state.far}  |  dist: $dist\n'
+          '  dwell: ${dwell}m  |  remaining: ${remaining}m\n'
+          '  logged: ${state.logged}  |  waiting: ${state.waitingToGetLogged}';
+    }).join('\n\n');
+
+    return 'Location Tracking State\n\n$lines';
+  }
+
   String _rawGpsDebugSummary() {
     final String readAt = _lastRawGpsPayloadAt == null
         ? 'No payload received yet'
@@ -1592,98 +1666,111 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   void _processFix(LocationFix fix) {
     final DateTime now = DateTime.now();
-    final double elapsedMinutes;
-    if (_lastFixAt == null) {
-      elapsedMinutes = 0;
-    } else {
-      elapsedMinutes = now.difference(_lastFixAt!).inMilliseconds / 60000;
-    }
+    final double elapsedMinutes = _lastFixAt == null
+        ? 0
+        : now.difference(_lastFixAt!).inMilliseconds / 60000;
     _lastFixAt = now;
 
-    _currentFix = fix;
     if (_sites.isEmpty) {
+      // No sites yet — still update currentFix so debug/log screen shows live GPS.
+      setState(() {
+        _currentFix = fix;
+        _candidateSite = null;
+        _stableSamples = 0;
+      });
       return;
     }
 
-    final SiteDistance nearest = _findNearestSite(fix, _sites);
     final bool goodAccuracy = fix.accuracyMeters <= _maxAccuracyMeters;
     final bool lowSpeed = fix.speedMetersPerSecond <= _maxSpeedForDwell;
     final double effectiveRadius = max(
       _matchRadiusMeters,
       min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
     );
-    final bool inGeofence = nearest.distanceMeters <= effectiveRadius;
 
-    // Track how long previously-logged sites have stayed outside geofence.
-    for (final String address in _sessionLoggedAddresses.toList()) {
-      JobSite? loggedSite;
-      for (final JobSite site in _sites) {
-        if (site.address == address) {
-          loggedSite = site;
-          break;
-        }
+    // Single pass over all sites — same fields as LocationTrackingState — drives
+    // all retrigger, dwell, and candidate decisions from per-site proximity state.
+    JobSite? nearestSite;
+    double nearestDistance = double.infinity;
+    JobSite? newCandidateSite;
+    double candidateDistance = double.infinity;
+
+    for (final JobSite site in _sites) {
+      final double distance =
+          _distanceMeters(fix.lat, fix.lng, site.lat, site.lng);
+      final bool inGeofence = distance <= effectiveRadius;
+      final bool isLogged = _sessionLoggedAddresses.contains(site.address);
+
+      // Track nearest site for UI display (all sites, regardless of logged state).
+      if (distance < nearestDistance) {
+        nearestSite = site;
+        nearestDistance = distance;
       }
-      if (loggedSite == null) {
+
+      if (isLogged) {
+        // Out-of-geofence retrigger: track how long a logged site has been outside
+        // geofence and reset it once the worker has been away long enough.
+        if (!inGeofence) {
+          final DateTime outSince =
+              _outOfGeofenceSince.putIfAbsent(site.address, () => now);
+          if (now.difference(outSince).inMinutes >= _outOfGeofenceRetriggerMinutes) {
+            _sessionLoggedAddresses.remove(site.address);
+            _outOfGeofenceSince.remove(site.address);
+            _dwellMinutes[site.address] = 0;
+          }
+        } else {
+          _outOfGeofenceSince.remove(site.address);
+        }
+        // Skip as dwell candidate — a just-retriggered site is picked up next poll.
         continue;
       }
 
-      final double distanceToLoggedSite = _distanceMeters(
-        fix.lat,
-        fix.lng,
-        loggedSite.lat,
-        loggedSite.lng,
-      );
-      final bool outsideLoggedSite = distanceToLoggedSite > effectiveRadius;
-
-      if (outsideLoggedSite) {
-        final DateTime outSince =
-            _outOfGeofenceSince.putIfAbsent(address, () => now);
-        final int outsideMinutes = now.difference(outSince).inMinutes;
-        if (outsideMinutes >= _outOfGeofenceRetriggerMinutes) {
-          _sessionLoggedAddresses.remove(address);
-          _outOfGeofenceSince.remove(address);
-          // Start dwell from zero after enough time outside geofence.
-          _dwellMinutes[address] = 0;
-        }
-      } else {
-        _outOfGeofenceSince.remove(address);
+      // Dwell candidate: nearest non-logged site currently inside geofence.
+      if (inGeofence && distance < candidateDistance) {
+        newCandidateSite = site;
+        candidateDistance = distance;
       }
     }
 
-    if (inGeofence) {
-      _stableSamples += 1;
-      _candidateSite = nearest.site;
+    // Accumulate dwell for the winning candidate.
+    int newStableSamples;
+    if (newCandidateSite != null) {
+      newStableSamples = _stableSamples + 1;
       final double increment = elapsedMinutes.clamp(0, 3);
-      _dwellMinutes[nearest.site.address] =
-          (_dwellMinutes[nearest.site.address] ?? 0) + increment;
+      _dwellMinutes[newCandidateSite.address] =
+          (_dwellMinutes[newCandidateSite.address] ?? 0) + increment;
     } else {
-      _stableSamples = 0;
-      _candidateSite = null;
+      newStableSamples = 0;
     }
 
-    if (_candidateSite != null && _pendingSite == null) {
-      final double dwell = _dwellMinutes[_candidateSite!.address] ?? 0;
-      final bool alreadyLogged =
-          _sessionLoggedAddresses.contains(_candidateSite!.address);
-
-      if (!alreadyLogged &&
-          dwell >= _candidateSite!.requiredDwellMinutes.toDouble() &&
-          _stableSamples >= _requiredStableSamples) {
-        _showConfirmationPrompt(_candidateSite!);
-      }
-    }
+    final SiteDistance nearest =
+        SiteDistance(site: nearestSite!, distanceMeters: nearestDistance);
+    final bool nearestInGeofence = nearestDistance <= effectiveRadius;
 
     setState(() {
+      _currentFix = fix;
+      _candidateSite = newCandidateSite;
+      _stableSamples = newStableSamples;
       _latestNearest = nearest;
       _status = _buildStatusText(
         nearest: nearest,
         goodAccuracy: goodAccuracy,
         lowSpeed: lowSpeed,
-        inGeofence: inGeofence,
+        inGeofence: nearestInGeofence,
         effectiveRadius: effectiveRadius,
         hideNearestDetails: _shouldHideNearestInfo(nearest),
       );
     });
+
+    // Check whether the candidate has now met the dwell target.
+    if (_candidateSite != null && _pendingSite == null) {
+      final double dwell = _dwellMinutes[_candidateSite!.address] ?? 0;
+      if (!_sessionLoggedAddresses.contains(_candidateSite!.address) &&
+          dwell >= _candidateSite!.requiredDwellMinutes.toDouble() &&
+          _stableSamples >= _requiredStableSamples) {
+        _showConfirmationPrompt(_candidateSite!);
+      }
+    }
   }
 
   double _minutesRemainingToLog(JobSite site) {
@@ -1692,8 +1779,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   void _showConfirmationPrompt(JobSite site) {
-    _pendingSite = site;
-    _promptCountdown = 12;
+    setState(() {
+      _pendingSite = site;
+      _promptCountdown = 12;
+    });
     _promptTimer?.cancel();
     unawaited(_showLogReminderNotification(site, _promptCountdown));
     _promptTimer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
@@ -3540,6 +3629,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
+            child: Text(_locationTrackingStatesDebugSummary()),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -3836,6 +3932,51 @@ class DebugBatteryAppUsage {
   final String appName;
   final double foregroundMinutes;
   final double estimatedBatterySharePercent;
+}
+
+class LocationTrackingState {
+  LocationTrackingState({
+    required this.name,
+    required this.far,
+    required this.inGeofence,
+    required this.outOfGeofence,
+    required this.logged,
+    required this.waitingToGetLogged,
+    required this.dwellMinutes,
+    required this.remainingMinutes,
+    this.distanceMeters,
+    required this.lastUpdatedAt,
+  });
+
+  /// Display name of the saved location.
+  final String name;
+
+  /// True when the worker is beyond the far-distance threshold for this site.
+  final bool far;
+
+  /// True when the worker is within the active match-radius geofence.
+  final bool inGeofence;
+
+  /// True when a GPS fix exists but the worker is outside the active match-radius geofence.
+  final bool outOfGeofence;
+
+  /// True when this site has already been logged in the current tracking session.
+  final bool logged;
+
+  /// True when dwell is accumulating or a confirmation prompt is active but not yet logged.
+  final bool waitingToGetLogged;
+
+  /// Accumulated dwell time at this site in minutes for the current visit.
+  final double dwellMinutes;
+
+  /// Minutes remaining until the dwell target is reached (0 when target met).
+  final double remainingMinutes;
+
+  /// Current distance in metres from the user to this site. Null when no GPS fix is available.
+  final double? distanceMeters;
+
+  /// When this snapshot was last computed.
+  final DateTime lastUpdatedAt;
 }
 
 class JobSite {

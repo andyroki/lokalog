@@ -22,6 +22,28 @@ The prototype uses layered checks before logging:
 
 This combination helps avoid accidental logs from noisy GPS, short stops, or pass-by traffic.
 
+## Location Tracking State Fields
+
+Each saved location is tracked in real time using these fields (visible on the Debug tab):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | The display name given to the saved location. |
+| `inGeofence` | bool | Worker is currently inside the active match radius (~100 m) of this site. Dwell time only accumulates when this is true. |
+| `outOfGeofence` | bool | A GPS fix exists but the worker is outside the match radius. The site is nearby but not close enough to count dwell time. |
+| `far` | bool | Worker is beyond the far-distance threshold (default 3000 m), or no GPS fix is available yet. |
+| `distanceMeters` | number | Current straight-line distance in metres from the worker to this site. Empty when no GPS fix is available. |
+| `dwell` | minutes | How many minutes the worker has been continuously present inside this site's geofence during the current visit. Resets to 0 after staying away long enough. |
+| `remaining` | minutes | How many more minutes the worker needs to stay before the log is triggered. Formula: `required minutes − dwell minutes`. Reaches 0 when the target is met. |
+| `waiting` | bool | The site is actively working toward a log but has not been logged yet. True when dwell is accumulating (worker is inside geofence and time is counting) or a confirmation prompt is currently on screen. |
+| `logged` | bool | This site has already been logged in the current tracking session. Resets after the worker leaves and stays away for the out-of-geofence retrigger period. |
+
+### Typical lifecycle of a site visit
+
+```
+far → out of geofence → in geofence (waiting, dwell building) → prompt shown → logged
+```
+
 ## Run
 
 ```bash
