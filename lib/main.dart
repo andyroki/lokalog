@@ -2120,6 +2120,23 @@ class _ScenarioPageState extends State<ScenarioPage> {
         input.zip.trim().isEmpty;
   }
 
+  bool _isDuplicateLocationName(String name, {int? excludingIndex}) {
+    final String normalized = name.trim().toLowerCase();
+    if (normalized.isEmpty) {
+      return false;
+    }
+
+    for (int i = 0; i < _sites.length; i++) {
+      if (excludingIndex != null && i == excludingIndex) {
+        continue;
+      }
+      if (_sites[i].name.trim().toLowerCase() == normalized) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   Future<void> _onAddNewLocation() async {
     if (_sites.length >= _maxSavedLocations) {
       if (!mounted) {
@@ -2164,6 +2181,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
         continue;
       }
 
+      if (_isDuplicateLocationName(result.name)) {
+        prefill = result;
+        sheetError = 'Location name already exists. Please use a unique name.';
+        continue;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Looking up latitude/longitude...')),
       );
@@ -2182,7 +2205,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       }
 
       final JobSite newSite = JobSite(
-        name: result.name,
+        name: result.name.trim(),
         street: result.street,
         city: result.city,
         state: result.state,
@@ -2551,6 +2574,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
         continue;
       }
 
+      if (_isDuplicateLocationName(result.name)) {
+        prefill = result;
+        sheetError = 'Location name already exists. Please use a unique name.';
+        continue;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Verifying address coordinates...')),
       );
@@ -2582,7 +2611,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       }
 
       final JobSite newSite = JobSite(
-        name: result.name,
+        name: result.name.trim(),
         street: result.street,
         city: result.city,
         state: result.state,
@@ -2646,6 +2675,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
         continue;
       }
 
+      if (_isDuplicateLocationName(result.name, excludingIndex: index)) {
+        prefill = result;
+        sheetError = 'Location name already exists. Please use a unique name.';
+        continue;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
             content: Text('Looking up updated latitude/longitude...')),
@@ -2664,7 +2699,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       }
 
       final JobSite updatedSite = JobSite(
-        name: result.name,
+        name: result.name.trim(),
         street: result.street,
         city: result.city,
         state: result.state,
