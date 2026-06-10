@@ -423,9 +423,9 @@ class MainActivity : FlutterActivity() {
 		result: MethodChannel.Result
 	) {
 		val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
-			.setWaitForAccurateLocation(false)
+			.setWaitForAccurateLocation(true)
 			.setMaxUpdates(1)
-			.setDurationMillis(10000L)
+			.setDurationMillis(15000L)
 			.build()
 
 		val callback = object : LocationCallback() {

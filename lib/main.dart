@@ -250,6 +250,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
   bool _isChangingTrackingState = false;
   bool _isFetchingCurrentLocation = false;
   DateTime? _lastFixAt;
+  Map<Object?, Object?>? _lastRawGpsPayload;
+  DateTime? _lastRawGpsPayloadAt;
+  String? _lastRawGpsReadError;
   SiteDistance? _latestNearest;
 
   JobSite? _candidateSite;
@@ -702,6 +705,40 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
 
     return 'Position polling is inactive. Close: ${_formatSecondsOption(_closePollSeconds)}, Far: ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.';
+  }
+
+  String _rawGpsDebugSummary() {
+    final String readAt = _lastRawGpsPayloadAt == null
+        ? 'No payload received yet'
+        : _formatLogTimestamp(_lastRawGpsPayloadAt!);
+
+    final String errorLine = _lastRawGpsReadError == null
+        ? 'Last read error: none'
+        : 'Last read error: $_lastRawGpsReadError';
+
+    final Map<Object?, Object?>? payload = _lastRawGpsPayload;
+    if (payload == null || payload.isEmpty) {
+      return 'Raw GPS Data\nLast payload: $readAt\n$errorLine\nPayload: empty';
+    }
+
+    final List<MapEntry<String, String>> entries = payload.entries
+        .map(
+          (MapEntry<Object?, Object?> entry) => MapEntry<String, String>(
+            entry.key?.toString() ?? 'null',
+            entry.value?.toString() ?? 'null',
+          ),
+        )
+        .toList()
+      ..sort(
+        (MapEntry<String, String> a, MapEntry<String, String> b) =>
+            a.key.compareTo(b.key),
+      );
+
+    final String payloadLines = entries
+        .map((MapEntry<String, String> entry) => '${entry.key}: ${entry.value}')
+        .join('\n');
+
+    return 'Raw GPS Data\nLast payload: $readAt\n$errorLine\n$payloadLines';
   }
 
   String _trackingRuntimeStateDebugSummary() {
@@ -1428,9 +1465,20 @@ class _ScenarioPageState extends State<ScenarioPage> {
         return;
       }
 
+      setState(() {
+        _lastRawGpsPayload = position == null
+            ? null
+            : Map<Object?, Object?>.from(position);
+        _lastRawGpsPayloadAt = DateTime.now();
+        _lastRawGpsReadError = null;
+      });
+
       final double? lat = (position?['latitude'] as num?)?.toDouble();
       final double? lng = (position?['longitude'] as num?)?.toDouble();
       if (lat == null || lng == null) {
+        setState(() {
+          _status = 'GPS payload missing latitude or longitude.';
+        });
         return;
       }
 
@@ -1449,6 +1497,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         return;
       }
       setState(() {
+        _lastRawGpsReadError = 'timeout after ${_gpsReadTimeout.inSeconds}s';
         _status =
             'GPS read timed out. Move outdoors for clearer sky view and try again.';
       });
@@ -1457,6 +1506,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
         return;
       }
       setState(() {
+        _lastRawGpsReadError =
+            '${error.code}: ${error.message ?? 'unknown error'}';
         _status = 'GPS error (${error.code}): ${error.message ?? 'unknown error'}';
       });
     } catch (_) {
@@ -1464,6 +1515,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         return;
       }
       setState(() {
+        _lastRawGpsReadError = 'unexpected read failure';
         _status = 'Unable to read GPS signal. Move outdoors and try again.';
       });
     }
@@ -1509,6 +1561,32 @@ class _ScenarioPageState extends State<ScenarioPage> {
         hideNearestDetails: _shouldHideNearestInfo(nearest),
       );
     });
+    unawaited(_saveTrackingRuntimeState());
+  }
+
+  void _onSitesChanged() {
+    final Set<String> validAddresses =
+        _sites.map((JobSite site) => site.address).toSet();
+
+    _sessionLoggedAddresses.removeWhere(
+      (String address) => !validAddresses.contains(address),
+    );
+    _dwellMinutes.removeWhere(
+      (String address, double _) => !validAddresses.contains(address),
+    );
+    _outOfGeofenceSince.removeWhere(
+      (String address, DateTime _) => !validAddresses.contains(address),
+    );
+
+    if (_sites.isEmpty) {
+      _latestNearest = null;
+    } else {
+      _refreshNearestUiFromCurrentFix();
+    }
+
+    if (_isTracking) {
+      _scheduleNextPoll(immediate: true);
+    }
     unawaited(_saveTrackingRuntimeState());
   }
 
@@ -2132,6 +2210,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _sites.add(newSite);
       });
       unawaited(_saveSites());
+      _onSitesChanged();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -2518,6 +2597,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _isFetchingCurrentLocation = false;
       });
       unawaited(_saveSites());
+      _onSitesChanged();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -2598,6 +2678,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _sites[index] = updatedSite;
       });
       unawaited(_saveSites());
+      _onSitesChanged();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -2638,6 +2719,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _sites.removeAt(index);
     });
     unawaited(_saveSites());
+    _onSitesChanged();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Deleted location: ${site.name}.')),
     );
@@ -2852,20 +2934,30 @@ class _ScenarioPageState extends State<ScenarioPage> {
               ),
             ),
           ),
-        if (_latestNearest != null && !_shouldHideNearestInfo(_latestNearest!))
-          Card(
-            color: Theme.of(context).colorScheme.secondaryContainer,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                'Countdown to log ${_latestNearest!.site.name}: '
-                '${_minutesRemainingToLog(_latestNearest!.site).toStringAsFixed(1)} minutes remaining',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+        if (_latestNearest != null)
+          Builder(
+            builder: (BuildContext context) {
+              final SiteDistance nearest = _latestNearest!;
+              final bool hideNearest = _shouldHideNearestInfo(nearest);
+              final String message = hideNearest
+                  ? 'Nearest location is currently far (${_fmtDist(nearest.distanceMeters)}). Move closer to start countdown.'
+                  : 'Countdown to log ${nearest.site.name}: '
+                      '${_minutesRemainingToLog(nearest.site).toStringAsFixed(1)} minutes remaining';
+
+              return Card(
+                color: Theme.of(context).colorScheme.secondaryContainer,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(
+                    message,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.onSecondaryContainer,
+                    ),
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         if (_pendingSite != null)
           Card(
@@ -3393,6 +3485,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
             child: Text(
               _pollingDebugSummary(),
             ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(_rawGpsDebugSummary()),
           ),
         ),
         const SizedBox(height: 12),
