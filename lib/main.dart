@@ -176,6 +176,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
       'pref_out_of_geofence_retrigger_minutes';
   static const String _useMetricPreferenceKey = 'pref_use_metric';
   static const String _trackingEnabledPreferenceKey = 'pref_tracking_enabled';
+  static const String _trackingRuntimeStatePreferenceKey =
+      'pref_tracking_runtime_state_v1';
   static const List<int> _closePollSecondOptions = <int>[30, 60, 300];
   static const List<int> _farPollSecondOptions = <int>[60, 300, 600];
   static const List<int> _farDistanceMeterOptions = <int>[
@@ -195,6 +197,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   static const int _defaultFarPollSeconds = 300;
   static const int _defaultFarDistanceMeters = 3000;
   static const int _defaultOutOfGeofenceRetriggerMinutes = 20;
+  static const Duration _gpsReadTimeout = Duration(seconds: 20);
   static const int _maxSavedLocations = 5;
   static const int _requiredStableSamples = 3;
   static const double _maxAccuracyMeters = 50;
@@ -223,6 +226,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   bool _autoStartTrackingAttempted = false;
   bool _trackingOffStartupDialogShown = false;
   bool _trackingPreferenceLoaded = false;
+  bool _trackingRuntimeStateLoaded = false;
   bool _sitesLoaded = false;
   bool _trackingEnabledPreference = true;
 
@@ -243,6 +247,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _defaultOutOfGeofenceRetriggerMinutes;
   bool _hideNearestWhenFar = true;
   bool _useMetric = true;
+  bool _isChangingTrackingState = false;
   bool _isFetchingCurrentLocation = false;
   DateTime? _lastFixAt;
   SiteDistance? _latestNearest;
@@ -262,6 +267,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   String? _batteryUsageError;
   int? _deviceBatteryLevel;
   DateTime? _batteryUsageFetchedAt;
+  DateTime? _trackingRuntimeStateLoadedAt;
+  DateTime? _trackingRuntimeStateSavedAt;
   List<DebugBatteryAppUsage> _batteryUsage = <DebugBatteryAppUsage>[];
 
   @override
@@ -272,6 +279,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     unawaited(_loadPollingPreferences());
     unawaited(_loadUnitPreference());
     unawaited(_loadTrackingPreference());
+    unawaited(_loadTrackingRuntimeState());
     unawaited(_loadSites());
   }
 
@@ -326,6 +334,111 @@ class _ScenarioPageState extends State<ScenarioPage> {
       );
     } catch (_) {
       // Keep local preference value if persistence fails.
+    }
+  }
+
+  Future<void> _loadTrackingRuntimeState() async {
+    try {
+      final String? raw = await _locationChannel.invokeMethod<String>(
+        'loadPreference',
+        <String, dynamic>{'key': _trackingRuntimeStatePreferenceKey},
+      );
+
+      if (raw != null && raw.trim().isNotEmpty) {
+        final dynamic decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          final List<String> loggedAddresses =
+              ((decoded['sessionLoggedAddresses'] as List<dynamic>?) ??
+                      <dynamic>[])
+                  .whereType<String>()
+                  .toList();
+
+          final Map<String, double> dwellMinutes = <String, double>{};
+          final dynamic dwellRaw = decoded['dwellMinutes'];
+          if (dwellRaw is Map<String, dynamic>) {
+            dwellRaw.forEach((String key, dynamic value) {
+              final double? parsed = (value as num?)?.toDouble();
+              if (parsed != null && parsed >= 0) {
+                dwellMinutes[key] = parsed;
+              }
+            });
+          }
+
+          final Map<String, DateTime> outOfGeofenceSince = <String, DateTime>{};
+          final dynamic outRaw = decoded['outOfGeofenceSince'];
+          if (outRaw is Map<String, dynamic>) {
+            outRaw.forEach((String key, dynamic value) {
+              final int? epochMillis = (value as num?)?.toInt();
+              if (epochMillis != null && epochMillis > 0) {
+                outOfGeofenceSince[key] =
+                    DateTime.fromMillisecondsSinceEpoch(epochMillis);
+              }
+            });
+          }
+
+          if (mounted) {
+            setState(() {
+              _sessionLoggedAddresses
+                ..clear()
+                ..addAll(loggedAddresses);
+              _dwellMinutes
+                ..clear()
+                ..addAll(dwellMinutes);
+              _outOfGeofenceSince
+                ..clear()
+                ..addAll(outOfGeofenceSince);
+              _trackingRuntimeStateLoaded = true;
+              _trackingRuntimeStateLoadedAt = DateTime.now();
+            });
+          } else {
+            _sessionLoggedAddresses
+              ..clear()
+              ..addAll(loggedAddresses);
+            _dwellMinutes
+              ..clear()
+              ..addAll(dwellMinutes);
+            _outOfGeofenceSince
+              ..clear()
+              ..addAll(outOfGeofenceSince);
+            _trackingRuntimeStateLoaded = true;
+            _trackingRuntimeStateLoadedAt = DateTime.now();
+          }
+          _maybeAutoStartTracking();
+          return;
+        }
+      }
+    } catch (_) {
+      // Keep best-effort behavior when runtime state cannot be restored.
+    }
+
+    _trackingRuntimeStateLoaded = true;
+    _trackingRuntimeStateLoadedAt = DateTime.now();
+    _maybeAutoStartTracking();
+  }
+
+  Future<void> _saveTrackingRuntimeState() async {
+    try {
+      final Map<String, dynamic> payload = <String, dynamic>{
+        'sessionLoggedAddresses': _sessionLoggedAddresses.toList(),
+        'dwellMinutes': <String, double>{..._dwellMinutes},
+        'outOfGeofenceSince': _outOfGeofenceSince.map(
+          (String key, DateTime value) => MapEntry<String, int>(
+            key,
+            value.millisecondsSinceEpoch,
+          ),
+        ),
+      };
+
+      await _locationChannel.invokeMethod<void>(
+        'savePreference',
+        <String, dynamic>{
+          'key': _trackingRuntimeStatePreferenceKey,
+          'value': jsonEncode(payload),
+        },
+      );
+      _trackingRuntimeStateSavedAt = DateTime.now();
+    } catch (_) {
+      // Keep runtime behavior even if persistence fails.
     }
   }
 
@@ -591,6 +704,21 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return 'Position polling is inactive. Close: ${_formatSecondsOption(_closePollSeconds)}, Far: ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.';
   }
 
+  String _trackingRuntimeStateDebugSummary() {
+    final String restored = _trackingRuntimeStateLoadedAt == null
+        ? 'Not restored yet'
+        : _formatLogTimestamp(_trackingRuntimeStateLoadedAt!);
+    final String saved = _trackingRuntimeStateSavedAt == null
+        ? 'No save in this app session yet'
+        : _formatLogTimestamp(_trackingRuntimeStateSavedAt!);
+
+    return 'Runtime timing state\n'
+        'Restored: $restored\n'
+        'Saved: $saved\n'
+        'Tracked sites this session: ${_sessionLoggedAddresses.length}\n'
+        'Active dwell timers: ${_dwellMinutes.length}';
+  }
+
   bool _shouldHideNearestInfo(SiteDistance nearest) {
     return _hideNearestWhenFar && nearest.distanceMeters > _farDistanceMeters;
   }
@@ -738,6 +866,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (_autoStartTrackingAttempted ||
         !mounted ||
         !_trackingPreferenceLoaded ||
+        !_trackingRuntimeStateLoaded ||
         !_sitesLoaded) {
       return;
     }
@@ -1049,21 +1178,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _startScenario() async {
-    if (_sites.isEmpty) {
-      setState(() {
-        _status = 'No locations found. Add locations from the Locations tab.';
-      });
-      return;
-    }
-
     final bool hasLocationAccess = await _ensureLocationAccess();
     if (!hasLocationAccess || !mounted) {
       return;
     }
 
-    _sessionLoggedAddresses.clear();
-    _dwellMinutes.clear();
-    _outOfGeofenceSince.clear();
+    // Resume persisted runtime timing state instead of resetting on restart.
     _stableSamples = 0;
     _candidateSite = null;
     _pendingSite = null;
@@ -1072,10 +1192,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
     _lastFixAt = null;
     _promptTimer?.cancel();
     _isTracking = true;
-    _status = 'Tracking started. Reading live GPS signal...';
+    _status = _sites.isEmpty
+      ? 'Tracking started. No locations configured yet. Add locations from the Locations tab.'
+      : 'Tracking started. Reading live GPS signal...';
 
     _scheduleNextPoll(immediate: true);
     setState(() {});
+    unawaited(_saveTrackingRuntimeState());
   }
 
   Future<bool> _confirmStopTracking() async {
@@ -1105,21 +1228,55 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onTrackingToggleChanged(bool enabled) async {
+    if (_isChangingTrackingState) {
+      return;
+    }
+
+    setState(() {
+      _isChangingTrackingState = true;
+    });
+
     if (enabled) {
-      await _saveTrackingPreference(true);
-      await _startScenario();
+      try {
+        await _saveTrackingPreference(true);
+        await _startScenario();
+
+        if (!_isTracking && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not start tracking: $_status')),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isChangingTrackingState = false;
+          });
+        } else {
+          _isChangingTrackingState = false;
+        }
+      }
       return;
     }
 
-    if (!_isTracking) {
-      await _saveTrackingPreference(false);
-      return;
-    }
+    try {
+      if (!_isTracking) {
+        await _saveTrackingPreference(false);
+        return;
+      }
 
-    final bool shouldStop = await _confirmStopTracking();
-    if (shouldStop) {
-      _stopScenario();
-      await _saveTrackingPreference(false);
+      final bool shouldStop = await _confirmStopTracking();
+      if (shouldStop) {
+        _stopScenario();
+        await _saveTrackingPreference(false);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isChangingTrackingState = false;
+        });
+      } else {
+        _isChangingTrackingState = false;
+      }
     }
   }
 
@@ -1265,7 +1422,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
           .invokeMethod<Map<Object?, Object?>>(
             'getCurrentLocation',
           )
-          .timeout(const Duration(seconds: 12));
+          .timeout(_gpsReadTimeout);
 
       if (!_isTracking || !mounted) {
         return;
@@ -1287,6 +1444,21 @@ class _ScenarioPageState extends State<ScenarioPage> {
         ),
       );
       _processFix(fix);
+    } on TimeoutException {
+      if (!mounted || !_isTracking) {
+        return;
+      }
+      setState(() {
+        _status =
+            'GPS read timed out. Move outdoors for clearer sky view and try again.';
+      });
+    } on PlatformException catch (error) {
+      if (!mounted || !_isTracking) {
+        return;
+      }
+      setState(() {
+        _status = 'GPS error (${error.code}): ${error.message ?? 'unknown error'}';
+      });
     } catch (_) {
       if (!mounted || !_isTracking) {
         return;
@@ -1308,6 +1480,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _promptCountdown = 0;
       _status = 'Tracking stopped.';
     });
+    unawaited(_saveTrackingRuntimeState());
   }
 
   void _refreshNearestUiFromCurrentFix() {
@@ -1336,6 +1509,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         hideNearestDetails: _shouldHideNearestInfo(nearest),
       );
     });
+    unawaited(_saveTrackingRuntimeState());
   }
 
   void _processFix(LocationFix fix) {
@@ -1515,6 +1689,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
           : 'Job confirmed and logged for ${site.address}.';
     });
     unawaited(_cancelLogReminderNotification());
+    unawaited(_saveTrackingRuntimeState());
   }
 
   void _debugRetriggerCurrentSite() {
@@ -1567,6 +1742,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _status =
           'Retrigger restarted for ${site.address}. Stay in geofence for ${site.requiredDwellMinutes} min to log again.';
     });
+            unawaited(_saveTrackingRuntimeState());
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2019,7 +2195,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     try {
       final Map<Object?, Object?>? position = await _locationChannel
           .invokeMethod<Map<Object?, Object?>>('getCurrentLocation')
-          .timeout(const Duration(seconds: 12));
+          .timeout(_gpsReadTimeout);
       final double? lat = (position?['latitude'] as num?)?.toDouble();
       final double? lng = (position?['longitude'] as num?)?.toDouble();
       if (lat == null || lng == null) {
@@ -2923,11 +3099,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Tracking On'),
-                  subtitle: Text(_isTracking
-                      ? 'Tracking is active.'
-                      : 'Tracking is stopped.'),
+                  subtitle: Text(
+                    _isTracking
+                        ? 'Tracking is active.'
+                        : (_trackingEnabledPreference
+                            ? 'Tracking did not start. $_status'
+                            : 'Tracking is stopped.'),
+                  ),
                   value: _isTracking,
-                  onChanged: (bool value) {
+                  onChanged: _isChangingTrackingState
+                      ? null
+                      : (bool value) {
                     unawaited(_onTrackingToggleChanged(value));
                   },
                 ),
@@ -3211,6 +3393,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
             child: Text(
               _pollingDebugSummary(),
             ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(_trackingRuntimeStateDebugSummary()),
           ),
         ),
         const SizedBox(height: 12),
