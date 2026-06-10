@@ -579,6 +579,18 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return nearest.distanceMeters > _farDistanceMeters ? 'far' : 'close';
   }
 
+  String _pollingDebugSummary() {
+    if (_isTracking) {
+      return 'Position polling: ${_formatSecondsOption(_activePollSeconds())} (${_pollingModeSummary()} mode).';
+    }
+
+    if (_trackingEnabledPreference) {
+      return 'Position polling should be active, but it is not currently running. Current status: $_status';
+    }
+
+    return 'Position polling is inactive. Close: ${_formatSecondsOption(_closePollSeconds)}, Far: ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.';
+  }
+
   bool _shouldHideNearestInfo(SiteDistance nearest) {
     return _hideNearestWhenFar && nearest.distanceMeters > _farDistanceMeters;
   }
@@ -3197,9 +3209,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Text(
-              _isTracking
-                  ? 'Position polling: ${_formatSecondsOption(_activePollSeconds())} (${_pollingModeSummary()} mode).'
-                  : 'Position polling is inactive. Close: ${_formatSecondsOption(_closePollSeconds)}, Far: ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.',
+              _pollingDebugSummary(),
             ),
           ),
         ),

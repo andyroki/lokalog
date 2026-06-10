@@ -11,6 +11,7 @@ import android.os.Build
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Looper
 import android.provider.Settings
 import android.location.LocationManager
 import android.util.Log
@@ -18,6 +19,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
@@ -394,7 +398,7 @@ class MainActivity : FlutterActivity() {
 				fused.lastLocation
 					.addOnSuccessListener { fallback ->
 						if (fallback == null) {
-							result.error("NO_LOCATION", "No location available", null)
+							requestSingleFreshLocation(fused, result)
 							return@addOnSuccessListener
 						}
 						sendLocationResult(
@@ -410,6 +414,41 @@ class MainActivity : FlutterActivity() {
 					}
 			}
 			.addOnFailureListener { error ->
+				result.error("LOCATION_ERROR", error.message, null)
+			}
+	}
+
+	private fun requestSingleFreshLocation(
+		fused: com.google.android.gms.location.FusedLocationProviderClient,
+		result: MethodChannel.Result
+	) {
+		val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
+			.setWaitForAccurateLocation(true)
+			.setMaxUpdates(1)
+			.setDurationMillis(15000L)
+			.build()
+
+		val callback = object : LocationCallback() {
+			override fun onLocationResult(locationResult: LocationResult) {
+				fused.removeLocationUpdates(this)
+				val location = locationResult.lastLocation
+				if (location == null) {
+					result.error("NO_LOCATION", "No location available", null)
+					return
+				}
+				sendLocationResult(
+					location.latitude,
+					location.longitude,
+					location.accuracy.toDouble(),
+					location.speed.toDouble(),
+					result
+				)
+			}
+		}
+
+		fused.requestLocationUpdates(request, callback, Looper.getMainLooper())
+			.addOnFailureListener { error ->
+				fused.removeLocationUpdates(callback)
 				result.error("LOCATION_ERROR", error.message, null)
 			}
 	}
