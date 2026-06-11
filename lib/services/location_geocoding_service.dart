@@ -13,6 +13,9 @@ class GeocodePoint {
 }
 
 class LocationGeocodingService {
+  /// Forward geocode a user-entered US address using Nominatim.
+  /// Returns null for any network, shape, or parse issue so callers can
+  /// keep manual entry as a fallback path.
   static Future<GeocodePoint?> lookupCoordinates(AddLocationInput input) async {
     final String query =
         '${input.street.trim()}, ${input.city.trim()}, ${input.state.trim()} ${input.zip.trim()}, USA';
@@ -39,6 +42,7 @@ class LocationGeocodingService {
         return null;
       }
 
+      // Nominatim search returns a JSON array ordered by relevance.
       final dynamic decoded = jsonDecode(response.body);
       if (decoded is! List<dynamic> || decoded.isEmpty) {
         return null;
@@ -57,10 +61,13 @@ class LocationGeocodingService {
 
       return GeocodePoint(lat: lat, lng: lng);
     } catch (_) {
+      // Best-effort lookup: network/JSON failures are non-fatal.
       return null;
     }
   }
 
+  /// Reverse geocode current coordinates into an address form draft.
+  /// Returns null when no useful address fields are available.
   static Future<AddLocationInput?> reverseLookupAddress(
     LocationFix fix, {
     required int defaultRequiredMinutes,
@@ -99,6 +106,7 @@ class LocationGeocodingService {
         return null;
       }
 
+      // Build a displayable street from house number + best available road key.
       final String houseNumber =
           (addressRaw['house_number'] ?? '').toString().trim();
       final String road = ((addressRaw['road'] ??
@@ -121,23 +129,25 @@ class LocationGeocodingService {
               .toString())
           .trim();
 
+      // State value is normalized from strongest to weakest source:
+      // 1) explicit state code, 2) ISO subdivision code, 3) name mapping.
       final String stateCode =
           (addressRaw['state_code'] ?? '').toString().trim().toUpperCase();
       final String stateName = ((addressRaw['state'] ??
-                addressRaw['region'] ??
-                addressRaw['state_district'] ??
-                addressRaw['province'] ??
-                '')
-            .toString())
+                  addressRaw['region'] ??
+                  addressRaw['state_district'] ??
+                  addressRaw['province'] ??
+                  '')
+              .toString())
           .trim()
           .toUpperCase();
       final String isoStateCode = ((addressRaw['ISO3166-2-lvl4'] ??
-                addressRaw['ISO3166-2-lvl5'] ??
-                addressRaw['ISO3166-2-lvl6'] ??
-                addressRaw['ISO3166-2-lvl7'] ??
-                addressRaw['ISO3166-2-lvl8'] ??
-                '')
-            .toString())
+                  addressRaw['ISO3166-2-lvl5'] ??
+                  addressRaw['ISO3166-2-lvl6'] ??
+                  addressRaw['ISO3166-2-lvl7'] ??
+                  addressRaw['ISO3166-2-lvl8'] ??
+                  '')
+              .toString())
           .trim()
           .toUpperCase();
       String state =
@@ -148,6 +158,7 @@ class LocationGeocodingService {
             : isoStateCode;
       }
       if (state.isEmpty) {
+        // Fallback map for US full-state-name responses.
         const Map<String, String> usStateCodes = <String, String>{
           'ALABAMA': 'AL',
           'ALASKA': 'AK',
@@ -208,6 +219,7 @@ class LocationGeocodingService {
       }
       final String zip = (addressRaw['postcode'] ?? '').toString().trim();
 
+      // If reverse geocoder gave no meaningful address fragments, skip prefill.
       if (street.isEmpty && city.isEmpty && state.isEmpty && zip.isEmpty) {
         return null;
       }
@@ -221,6 +233,7 @@ class LocationGeocodingService {
         requiredMinutes: defaultRequiredMinutes,
       );
     } catch (_) {
+      // Reverse lookup is optional; UI can continue without auto-filled address.
       return null;
     }
   }
