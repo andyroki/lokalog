@@ -7,6 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
+import 'models/lokalog_models.dart';
+import 'services/location_tracking_calculator.dart';
+import 'services/tracking_controller.dart';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const LokaLogApp());
@@ -680,7 +684,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (_currentFix == null || _sites.isEmpty) {
       return _closePollSeconds;
     }
-    final SiteDistance nearest = _findNearestSite(_currentFix!, _sites);
+    final SiteDistance nearest = LocationTrackingCalculator.findNearestSite(
+      _currentFix!,
+      _sites,
+    );
     if (nearest.distanceMeters > _farDistanceMeters) {
       return _farPollSeconds;
     }
@@ -691,7 +698,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (_currentFix == null || _sites.isEmpty) {
       return 'close';
     }
-    final SiteDistance nearest = _findNearestSite(_currentFix!, _sites);
+    final SiteDistance nearest = LocationTrackingCalculator.findNearestSite(
+      _currentFix!,
+      _sites,
+    );
     return nearest.distanceMeters > _farDistanceMeters ? 'far' : 'close';
   }
 
@@ -708,56 +718,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   List<LocationTrackingState> _buildLocationTrackingStates() {
-    final LocationFix? fix = _currentFix;
-    final DateTime now = DateTime.now();
-
-    final List<LocationTrackingState> states = _sites.map((JobSite site) {
-      final double? distanceMeters = fix == null
-          ? null
-          : _distanceMeters(fix.lat, fix.lng, site.lat, site.lng);
-
-      final bool far =
-          distanceMeters == null || distanceMeters > _farDistanceMeters;
-
-      final double effectiveRadius = fix == null
-          ? _matchRadiusMeters
-          : max(
-              _matchRadiusMeters,
-              min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
-            );
-      final bool inGeofence =
-          distanceMeters != null && distanceMeters <= effectiveRadius;
-      final bool outOfGeofence =
-          distanceMeters != null && distanceMeters > effectiveRadius;
-
-      final double dwell = _dwellMinutes[site.address] ?? 0;
-      final double remaining =
-          max(0, site.requiredDwellMinutes.toDouble() - dwell);
-
-      final bool logged = _sessionLoggedAddresses.contains(site.address);
-      final bool waitingToGetLogged =
-          !logged &&
-          (_pendingSite?.address == site.address ||
-              (_candidateSite?.address == site.address && dwell > 0));
-
-      return LocationTrackingState(
-        name: site.name,
-        far: far,
-        inGeofence: inGeofence,
-        outOfGeofence: outOfGeofence,
-        logged: logged,
-        waitingToGetLogged: waitingToGetLogged,
-        dwellMinutes: dwell,
-        remainingMinutes: remaining,
-        distanceMeters: distanceMeters,
-        lastUpdatedAt: now,
-      );
-    }).toList();
-
-    states.sort((LocationTrackingState a, LocationTrackingState b) =>
-        a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-
-    return states;
+    return LocationTrackingCalculator.buildLocationTrackingStates(
+      sites: _sites,
+      fix: _currentFix,
+      farDistanceMeters: _farDistanceMeters,
+      matchRadiusMeters: _matchRadiusMeters,
+      dwellMinutes: _dwellMinutes,
+      sessionLoggedAddresses: _sessionLoggedAddresses,
+      pendingSite: _pendingSite,
+      candidateSite: _candidateSite,
+      now: DateTime.now(),
+    );
   }
 
   String _locationTrackingStatesDebugSummary() {
@@ -1615,7 +1586,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return;
     }
 
-    final SiteDistance nearest = _findNearestSite(fix, _sites);
+    final SiteDistance nearest = LocationTrackingCalculator.findNearestSite(
+      fix,
+      _sites,
+    );
     final bool goodAccuracy = fix.accuracyMeters <= _maxAccuracyMeters;
     final bool lowSpeed = fix.speedMetersPerSecond <= _maxSpeedForDwell;
     final double effectiveRadius = max(
@@ -1666,116 +1640,60 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   void _processFix(LocationFix fix) {
     final DateTime now = DateTime.now();
-    final double elapsedMinutes = _lastFixAt == null
-        ? 0
-        : now.difference(_lastFixAt!).inMilliseconds / 60000;
+    final TrackingProcessResult result = TrackingController.processFix(
+      fix: fix,
+      now: now,
+      lastFixAt: _lastFixAt,
+      sites: _sites,
+      sessionLoggedAddresses: _sessionLoggedAddresses,
+      dwellMinutes: _dwellMinutes,
+      outOfGeofenceSince: _outOfGeofenceSince,
+      outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
+      matchRadiusMeters: _matchRadiusMeters,
+      maxAccuracyMeters: _maxAccuracyMeters,
+      maxSpeedForDwell: _maxSpeedForDwell,
+      requiredStableSamples: _requiredStableSamples,
+      currentCandidateSite: _candidateSite,
+      currentStableSamples: _stableSamples,
+      pendingSite: _pendingSite,
+    );
     _lastFixAt = now;
 
     if (_sites.isEmpty) {
-      // No sites yet — still update currentFix so debug/log screen shows live GPS.
       setState(() {
-        _currentFix = fix;
-        _candidateSite = null;
-        _stableSamples = 0;
+        _currentFix = result.currentFix;
+        _candidateSite = result.candidateSite;
+        _stableSamples = result.stableSamples;
       });
       return;
     }
 
-    final bool goodAccuracy = fix.accuracyMeters <= _maxAccuracyMeters;
-    final bool lowSpeed = fix.speedMetersPerSecond <= _maxSpeedForDwell;
-    final double effectiveRadius = max(
-      _matchRadiusMeters,
-      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
-    );
-
-    // Single pass over all sites — same fields as LocationTrackingState — drives
-    // all retrigger, dwell, and candidate decisions from per-site proximity state.
-    JobSite? nearestSite;
-    double nearestDistance = double.infinity;
-    JobSite? newCandidateSite;
-    double candidateDistance = double.infinity;
-
-    for (final JobSite site in _sites) {
-      final double distance =
-          _distanceMeters(fix.lat, fix.lng, site.lat, site.lng);
-      final bool inGeofence = distance <= effectiveRadius;
-      final bool isLogged = _sessionLoggedAddresses.contains(site.address);
-
-      // Track nearest site for UI display (all sites, regardless of logged state).
-      if (distance < nearestDistance) {
-        nearestSite = site;
-        nearestDistance = distance;
-      }
-
-      if (isLogged) {
-        // Out-of-geofence retrigger: track how long a logged site has been outside
-        // geofence and reset it once the worker has been away long enough.
-        if (!inGeofence) {
-          final DateTime outSince =
-              _outOfGeofenceSince.putIfAbsent(site.address, () => now);
-          if (now.difference(outSince).inMinutes >= _outOfGeofenceRetriggerMinutes) {
-            _sessionLoggedAddresses.remove(site.address);
-            _outOfGeofenceSince.remove(site.address);
-            _dwellMinutes[site.address] = 0;
-          }
-        } else {
-          _outOfGeofenceSince.remove(site.address);
-        }
-        // Skip as dwell candidate — a just-retriggered site is picked up next poll.
-        continue;
-      }
-
-      // Dwell candidate: nearest non-logged site currently inside geofence.
-      if (inGeofence && distance < candidateDistance) {
-        newCandidateSite = site;
-        candidateDistance = distance;
-      }
-    }
-
-    // Accumulate dwell for the winning candidate.
-    int newStableSamples;
-    if (newCandidateSite != null) {
-      newStableSamples = _stableSamples + 1;
-      final double increment = elapsedMinutes.clamp(0, 3);
-      _dwellMinutes[newCandidateSite.address] =
-          (_dwellMinutes[newCandidateSite.address] ?? 0) + increment;
-    } else {
-      newStableSamples = 0;
-    }
-
-    final SiteDistance nearest =
-        SiteDistance(site: nearestSite!, distanceMeters: nearestDistance);
-    final bool nearestInGeofence = nearestDistance <= effectiveRadius;
-
     setState(() {
-      _currentFix = fix;
-      _candidateSite = newCandidateSite;
-      _stableSamples = newStableSamples;
-      _latestNearest = nearest;
+      _currentFix = result.currentFix;
+      _candidateSite = result.candidateSite;
+      _stableSamples = result.stableSamples;
+      _latestNearest = result.latestNearest;
       _status = _buildStatusText(
-        nearest: nearest,
-        goodAccuracy: goodAccuracy,
-        lowSpeed: lowSpeed,
-        inGeofence: nearestInGeofence,
-        effectiveRadius: effectiveRadius,
-        hideNearestDetails: _shouldHideNearestInfo(nearest),
+        nearest: result.latestNearest!,
+        goodAccuracy: result.goodAccuracy,
+        lowSpeed: result.lowSpeed,
+        inGeofence: result.inGeofence,
+        effectiveRadius: result.effectiveRadiusMeters,
+        hideNearestDetails: _shouldHideNearestInfo(result.latestNearest!),
       );
     });
 
     // Check whether the candidate has now met the dwell target.
-    if (_candidateSite != null && _pendingSite == null) {
-      final double dwell = _dwellMinutes[_candidateSite!.address] ?? 0;
-      if (!_sessionLoggedAddresses.contains(_candidateSite!.address) &&
-          dwell >= _candidateSite!.requiredDwellMinutes.toDouble() &&
-          _stableSamples >= _requiredStableSamples) {
-        _showConfirmationPrompt(_candidateSite!);
-      }
+    if (result.shouldPrompt && result.promptSite != null) {
+      _showConfirmationPrompt(result.promptSite!);
     }
   }
 
   double _minutesRemainingToLog(JobSite site) {
-    final double dwell = _dwellMinutes[site.address] ?? 0;
-    return max(0, site.requiredDwellMinutes.toDouble() - dwell);
+    return LocationTrackingCalculator.minutesRemainingToLog(
+      site,
+      _dwellMinutes,
+    );
   }
 
   void _showConfirmationPrompt(JobSite site) {
@@ -1927,15 +1845,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   double _confidenceScore(LocationFix fix, JobSite site) {
-    final double distance =
-        _distanceMeters(fix.lat, fix.lng, site.lat, site.lng);
-    final double accuracyScore = (1 - (fix.accuracyMeters / 60)).clamp(0, 1);
-    final double distanceScore = (1 - (distance / 120)).clamp(0, 1);
-    final double speedScore = (1 - (fix.speedMetersPerSecond / 3)).clamp(0, 1);
-    return ((accuracyScore * 0.4) +
-            (distanceScore * 0.4) +
-            (speedScore * 0.2)) *
-        100;
+    return LocationTrackingCalculator.confidenceScore(fix, site);
   }
 
   String _buildStatusText({
@@ -2016,34 +1926,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return null;
     }
   }
-
-  SiteDistance _findNearestSite(LocationFix fix, List<JobSite> sites) {
-    JobSite nearest = sites.first;
-    double best = _distanceMeters(fix.lat, fix.lng, nearest.lat, nearest.lng);
-    for (final JobSite site in sites.skip(1)) {
-      final double next = _distanceMeters(fix.lat, fix.lng, site.lat, site.lng);
-      if (next < best) {
-        nearest = site;
-        best = next;
-      }
-    }
-    return SiteDistance(site: nearest, distanceMeters: best);
-  }
-
-  double _distanceMeters(double lat1, double lng1, double lat2, double lng2) {
-    const double earthRadius = 6371000;
-    final double dLat = _toRadians(lat2 - lat1);
-    final double dLng = _toRadians(lng2 - lng1);
-    final double a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(_toRadians(lat1)) *
-            cos(_toRadians(lat2)) *
-            sin(dLng / 2) *
-            sin(dLng / 2);
-    final double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    return earthRadius * c;
-  }
-
-  double _toRadians(double deg) => deg * pi / 180;
 
   String _formatLogTimestamp(DateTime value) {
     const List<String> monthNames = <String>[
@@ -3164,6 +3046,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
             final bool showAddressLine =
                 address.isNotEmpty && address != clientName;
             return Card(
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Theme.of(context).colorScheme.surfaceContainerHigh
+                  : null,
               child: ListTile(
                 title: Text('Customer: $clientName'),
                 subtitle: Text(
@@ -3916,184 +3801,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
             ),
         ],
       ),
-    );
-  }
-}
-
-class DebugBatteryAppUsage {
-  DebugBatteryAppUsage({
-    required this.packageName,
-    required this.appName,
-    required this.foregroundMinutes,
-    required this.estimatedBatterySharePercent,
-  });
-
-  final String packageName;
-  final String appName;
-  final double foregroundMinutes;
-  final double estimatedBatterySharePercent;
-}
-
-class LocationTrackingState {
-  LocationTrackingState({
-    required this.name,
-    required this.far,
-    required this.inGeofence,
-    required this.outOfGeofence,
-    required this.logged,
-    required this.waitingToGetLogged,
-    required this.dwellMinutes,
-    required this.remainingMinutes,
-    this.distanceMeters,
-    required this.lastUpdatedAt,
-  });
-
-  /// Display name of the saved location.
-  final String name;
-
-  /// True when the worker is beyond the far-distance threshold for this site.
-  final bool far;
-
-  /// True when the worker is within the active match-radius geofence.
-  final bool inGeofence;
-
-  /// True when a GPS fix exists but the worker is outside the active match-radius geofence.
-  final bool outOfGeofence;
-
-  /// True when this site has already been logged in the current tracking session.
-  final bool logged;
-
-  /// True when dwell is accumulating or a confirmation prompt is active but not yet logged.
-  final bool waitingToGetLogged;
-
-  /// Accumulated dwell time at this site in minutes for the current visit.
-  final double dwellMinutes;
-
-  /// Minutes remaining until the dwell target is reached (0 when target met).
-  final double remainingMinutes;
-
-  /// Current distance in metres from the user to this site. Null when no GPS fix is available.
-  final double? distanceMeters;
-
-  /// When this snapshot was last computed.
-  final DateTime lastUpdatedAt;
-}
-
-class JobSite {
-  JobSite({
-    required this.name,
-    required this.street,
-    required this.city,
-    required this.state,
-    required this.zip,
-    required this.lat,
-    required this.lng,
-    required this.requiredDwellMinutes,
-  });
-
-  final String name;
-  final String street;
-  final String city;
-  final String state;
-  final String zip;
-  final double lat;
-  final double lng;
-  final int requiredDwellMinutes;
-
-  String get address => '$street, $city, $state $zip';
-
-  Map<String, dynamic> toJson() {
-    return <String, dynamic>{
-      'name': name,
-      'street': street,
-      'city': city,
-      'state': state,
-      'zip': zip,
-      'lat': lat,
-      'lng': lng,
-      'requiredDwellMinutes': requiredDwellMinutes,
-    };
-  }
-
-  factory JobSite.fromJson(Map<String, dynamic> json) {
-    return JobSite(
-      name: (json['name'] ?? '').toString(),
-      street: (json['street'] ?? '').toString(),
-      city: (json['city'] ?? '').toString(),
-      state: (json['state'] ?? '').toString(),
-      zip: (json['zip'] ?? '').toString(),
-      lat: (json['lat'] as num).toDouble(),
-      lng: (json['lng'] as num).toDouble(),
-      requiredDwellMinutes: (json['requiredDwellMinutes'] as num).toInt(),
-    );
-  }
-}
-
-class LocationFix {
-  LocationFix({
-    required this.lat,
-    required this.lng,
-    required this.accuracyMeters,
-    required this.speedMetersPerSecond,
-  });
-
-  final double lat;
-  final double lng;
-  final double accuracyMeters;
-  final double speedMetersPerSecond;
-}
-
-class SiteDistance {
-  SiteDistance({required this.site, required this.distanceMeters});
-
-  final JobSite site;
-  final double distanceMeters;
-}
-
-class JobLog {
-  JobLog({
-    required this.name,
-    required this.address,
-    this.notes = '',
-    required this.lat,
-    required this.lng,
-    required this.confidence,
-    required this.confirmedByUser,
-    required this.autoLogged,
-    required this.timestamp,
-  });
-
-  final String name;
-  final String address;
-  final String notes;
-  final double lat;
-  final double lng;
-  final double confidence;
-  final bool confirmedByUser;
-  final bool autoLogged;
-  final DateTime timestamp;
-
-  JobLog copyWith({
-    String? name,
-    String? address,
-    String? notes,
-    double? lat,
-    double? lng,
-    double? confidence,
-    bool? confirmedByUser,
-    bool? autoLogged,
-    DateTime? timestamp,
-  }) {
-    return JobLog(
-      name: name ?? this.name,
-      address: address ?? this.address,
-      notes: notes ?? this.notes,
-      lat: lat ?? this.lat,
-      lng: lng ?? this.lng,
-      confidence: confidence ?? this.confidence,
-      confirmedByUser: confirmedByUser ?? this.confirmedByUser,
-      autoLogged: autoLogged ?? this.autoLogged,
-      timestamp: timestamp ?? this.timestamp,
     );
   }
 }
