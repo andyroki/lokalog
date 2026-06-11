@@ -8,16 +8,19 @@ import 'package:flutter/services.dart';
 
 import 'models/lokalog_models.dart';
 import 'services/battery_usage_service.dart';
+import 'services/location_permission_service.dart';
 import 'services/log_communication_service.dart';
 import 'services/location_geocoding_service.dart';
 import 'services/location_tracking_calculator.dart';
 import 'services/scenario_dialog_service.dart';
+import 'services/scenario_preferences_service.dart';
 import 'services/scenario_state_controller.dart';
 import 'services/tracking_controller.dart';
 import 'widgets/add_location_sheet.dart';
 import 'widgets/debug_screen_view.dart';
 import 'widgets/log_screen_view.dart';
 import 'widgets/locations_screen_view.dart';
+import 'widgets/settings_screen_view.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,42 +47,29 @@ class _LokaLogAppState extends State<LokaLogApp> {
   @override
   void initState() {
     super.initState();
-    unawaited(_loadDarkMode());
-    unawaited(_loadFontScale());
+    unawaited(_loadThemePreferences());
   }
 
-  Future<void> _loadDarkMode() async {
+  Future<void> _loadThemePreferences() async {
     try {
-      final String? value = await _prefChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _darkModePreferenceKey},
+      final ThemePreferences prefs =
+          await ScenarioPreferencesService.loadThemePreferences(
+        _prefChannel,
+        darkModeKey: _darkModePreferenceKey,
+        fontScaleKey: _fontScalePreferenceKey,
+        defaultFontScale: 1.0,
+        minFontScale: _minFontScale,
+        maxFontScale: _maxFontScale,
       );
-      if (value == null || !mounted) {
-        return;
-      }
-      setState(() {
-        _themeMode = value == 'true' ? ThemeMode.dark : ThemeMode.light;
-      });
-    } catch (_) {
-      // Use default if load fails.
-    }
-  }
-
-  Future<void> _loadFontScale() async {
-    try {
-      final String? raw = await _prefChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _fontScalePreferenceKey},
-      );
-      final double parsed = double.tryParse(raw ?? '') ?? 1.0;
       if (!mounted) {
         return;
       }
       setState(() {
-        _fontScale = parsed.clamp(_minFontScale, _maxFontScale);
+        _themeMode = prefs.darkModeEnabled ? ThemeMode.dark : ThemeMode.light;
+        _fontScale = prefs.fontScale;
       });
     } catch (_) {
-      // Keep default font scale if load fails.
+      // Use defaults if load fails.
     }
   }
 
@@ -87,13 +77,13 @@ class _LokaLogAppState extends State<LokaLogApp> {
     setState(() {
       _themeMode = enabled ? ThemeMode.dark : ThemeMode.light;
     });
-    unawaited(_prefChannel.invokeMethod<void>(
-      'savePreference',
-      <String, dynamic>{
-        'key': _darkModePreferenceKey,
-        'value': enabled.toString(),
-      },
-    ));
+    unawaited(
+      ScenarioPreferencesService.saveBoolPreference(
+        _prefChannel,
+        key: _darkModePreferenceKey,
+        value: enabled,
+      ),
+    );
   }
 
   void _setFontScale(double value) {
@@ -101,13 +91,13 @@ class _LokaLogAppState extends State<LokaLogApp> {
     setState(() {
       _fontScale = clamped;
     });
-    unawaited(_prefChannel.invokeMethod<void>(
-      'savePreference',
-      <String, dynamic>{
-        'key': _fontScalePreferenceKey,
-        'value': clamped.toStringAsFixed(2),
-      },
-    ));
+    unawaited(
+      ScenarioPreferencesService.saveFontScalePreference(
+        _prefChannel,
+        key: _fontScalePreferenceKey,
+        value: clamped,
+      ),
+    );
   }
 
   @override
@@ -251,8 +241,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   int _closePollSeconds = _defaultClosePollSeconds;
   int _farPollSeconds = _defaultFarPollSeconds;
   int _farDistanceMeters = _defaultFarDistanceMeters;
-  int _outOfGeofenceRetriggerMinutes =
-      _defaultOutOfGeofenceRetriggerMinutes;
+  int _outOfGeofenceRetriggerMinutes = _defaultOutOfGeofenceRetriggerMinutes;
   bool _hideNearestWhenFar = true;
   bool _useMetric = true;
   bool _isChangingTrackingState = false;
@@ -322,15 +311,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _loadTrackingPreference() async {
     try {
-      final String? raw = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _trackingEnabledPreferenceKey},
+      final bool? enabled = await ScenarioPreferencesService.loadBoolPreference(
+        _locationChannel,
+        key: _trackingEnabledPreferenceKey,
       );
       if (!mounted) {
         return;
       }
       setState(() {
-        _trackingEnabledPreference = raw != 'false';
+        _trackingEnabledPreference = enabled ?? true;
         _trackingPreferenceLoaded = true;
       });
     } catch (_) {
@@ -342,12 +331,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
   Future<void> _saveTrackingPreference(bool enabled) async {
     _trackingEnabledPreference = enabled;
     try {
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _trackingEnabledPreferenceKey,
-          'value': enabled.toString(),
-        },
+      await ScenarioPreferencesService.saveBoolPreference(
+        _locationChannel,
+        key: _trackingEnabledPreferenceKey,
+        value: enabled,
       );
     } catch (_) {
       // Keep local preference value if persistence fails.
@@ -356,9 +343,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _loadTrackingRuntimeState() async {
     try {
-      final String? raw = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _trackingRuntimeStatePreferenceKey},
+      final String? raw = await ScenarioPreferencesService.loadStringPreference(
+        _locationChannel,
+        key: _trackingRuntimeStatePreferenceKey,
       );
 
       if (raw != null && raw.trim().isNotEmpty) {
@@ -392,12 +379,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final Map<String, dynamic> payload =
           _state.buildTrackingRuntimeStatePayload();
 
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _trackingRuntimeStatePreferenceKey,
-          'value': jsonEncode(payload),
-        },
+      await ScenarioPreferencesService.saveStringPreference(
+        _locationChannel,
+        key: _trackingRuntimeStatePreferenceKey,
+        value: jsonEncode(payload),
       );
       _trackingRuntimeStateSavedAt = DateTime.now();
     } catch (_) {
@@ -407,21 +392,18 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _loadDebugMode() async {
     try {
-      final String? value = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _debugModePreferenceKey},
+      final DebugPreferences prefs =
+          await ScenarioPreferencesService.loadDebugPreferences(
+        _locationChannel,
+        debugModeKey: _debugModePreferenceKey,
+        showBatteryInfoKey: _showBatteryInfoPreferenceKey,
       );
-      final String? showBatteryValue =
-          await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _showBatteryInfoPreferenceKey},
-      );
-      if (value == null || !mounted) {
+      if (!mounted) {
         return;
       }
       setState(() {
-        _debugModeEnabled = value == 'true';
-        _showBatteryInfo = showBatteryValue != 'false';
+        _debugModeEnabled = prefs.debugModeEnabled;
+        _showBatteryInfo = prefs.showBatteryInfo;
       });
     } catch (_) {
       // Keep default if load fails.
@@ -433,12 +415,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _showBatteryInfo = enabled;
     });
     try {
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _showBatteryInfoPreferenceKey,
-          'value': enabled.toString(),
-        },
+      await ScenarioPreferencesService.saveBoolPreference(
+        _locationChannel,
+        key: _showBatteryInfoPreferenceKey,
+        value: enabled,
       );
     } catch (_) {
       // Keep local toggle behavior even if persistence fails.
@@ -454,61 +434,37 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _loadPollingPreferences() async {
     try {
-      final String? closeRaw = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _closePollSecondsPreferenceKey},
+      final PollingPreferences prefs =
+          await ScenarioPreferencesService.loadPollingPreferences(
+        _locationChannel,
+        closePollSecondsKey: _closePollSecondsPreferenceKey,
+        farPollSecondsKey: _farPollSecondsPreferenceKey,
+        farDistanceMetersKey: _farDistanceMetersPreferenceKey,
+        outOfGeofenceRetriggerMinutesKey:
+            _outOfGeofenceRetriggerMinutesPreferenceKey,
+        hideNearestWhenFarKey: _hideNearestWhenFarPreferenceKey,
+        defaultClosePollSeconds: _defaultClosePollSeconds,
+        defaultFarPollSeconds: _defaultFarPollSeconds,
+        defaultFarDistanceMeters: _defaultFarDistanceMeters,
+        defaultOutOfGeofenceRetriggerMinutes:
+            _defaultOutOfGeofenceRetriggerMinutes,
+        closePollSecondOptions: _closePollSecondOptions,
+        farPollSecondOptions: _farPollSecondOptions,
+        farDistanceMeterOptions: _farDistanceMeterOptions,
+        outOfGeofenceRetriggerMinuteOptions:
+            _outOfGeofenceRetriggerMinuteOptions,
       );
-      final String? farRaw = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _farPollSecondsPreferenceKey},
-      );
-      final String? distanceRaw = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _farDistanceMetersPreferenceKey},
-      );
-      final String? retriggerMinutesRaw =
-          await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{
-          'key': _outOfGeofenceRetriggerMinutesPreferenceKey,
-        },
-      );
-      final String? hideNearestRaw =
-          await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _hideNearestWhenFarPreferenceKey},
-      );
-
-      final int parsedClose = int.tryParse(closeRaw ?? '') ??
-          _defaultClosePollSeconds;
-      final int parsedFar =
-          int.tryParse(farRaw ?? '') ?? _defaultFarPollSeconds;
-      final int parsedDistance = int.tryParse(distanceRaw ?? '') ??
-          _defaultFarDistanceMeters;
-        final int parsedRetriggerMinutes =
-          int.tryParse(retriggerMinutesRaw ?? '') ??
-            _defaultOutOfGeofenceRetriggerMinutes;
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _closePollSeconds = _closePollSecondOptions.contains(parsedClose)
-            ? parsedClose
-            : _defaultClosePollSeconds;
-        _farPollSeconds = _farPollSecondOptions.contains(parsedFar)
-            ? parsedFar
-            : _defaultFarPollSeconds;
-        _farDistanceMeters = _farDistanceMeterOptions.contains(parsedDistance)
-            ? parsedDistance
-            : _defaultFarDistanceMeters;
-        _outOfGeofenceRetriggerMinutes =
-          _outOfGeofenceRetriggerMinuteOptions
-              .contains(parsedRetriggerMinutes)
-            ? parsedRetriggerMinutes
-            : _defaultOutOfGeofenceRetriggerMinutes;
-        _hideNearestWhenFar = hideNearestRaw != 'false';
+        _closePollSeconds = prefs.closePollSeconds;
+        _farPollSeconds = prefs.farPollSeconds;
+        _farDistanceMeters = prefs.farDistanceMeters;
+        _outOfGeofenceRetriggerMinutes = prefs.outOfGeofenceRetriggerMinutes;
+        _hideNearestWhenFar = prefs.hideNearestWhenFar;
       });
     } catch (_) {
       // Keep defaults if preference load fails.
@@ -517,40 +473,19 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _savePollingPreferences() async {
     try {
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _closePollSecondsPreferenceKey,
-          'value': _closePollSeconds.toString(),
-        },
-      );
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _farPollSecondsPreferenceKey,
-          'value': _farPollSeconds.toString(),
-        },
-      );
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _farDistanceMetersPreferenceKey,
-          'value': _farDistanceMeters.toString(),
-        },
-      );
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _outOfGeofenceRetriggerMinutesPreferenceKey,
-          'value': _outOfGeofenceRetriggerMinutes.toString(),
-        },
-      );
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _hideNearestWhenFarPreferenceKey,
-          'value': _hideNearestWhenFar.toString(),
-        },
+      await ScenarioPreferencesService.savePollingPreferences(
+        _locationChannel,
+        closePollSecondsKey: _closePollSecondsPreferenceKey,
+        closePollSeconds: _closePollSeconds,
+        farPollSecondsKey: _farPollSecondsPreferenceKey,
+        farPollSeconds: _farPollSeconds,
+        farDistanceMetersKey: _farDistanceMetersPreferenceKey,
+        farDistanceMeters: _farDistanceMeters,
+        outOfGeofenceRetriggerMinutesKey:
+            _outOfGeofenceRetriggerMinutesPreferenceKey,
+        outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
+        hideNearestWhenFarKey: _hideNearestWhenFarPreferenceKey,
+        hideNearestWhenFar: _hideNearestWhenFar,
       );
     } catch (_) {
       // Keep active runtime values even if persistence fails.
@@ -559,15 +494,16 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _loadUnitPreference() async {
     try {
-      final String? raw = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _useMetricPreferenceKey},
+      final bool? useMetric =
+          await ScenarioPreferencesService.loadBoolPreference(
+        _locationChannel,
+        key: _useMetricPreferenceKey,
       );
       if (!mounted) {
         return;
       }
       setState(() {
-        _useMetric = raw != 'false';
+        _useMetric = useMetric ?? true;
       });
     } catch (_) {
       // Keep default (metric) if load fails.
@@ -576,12 +512,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _saveUnitPreference() async {
     try {
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _useMetricPreferenceKey,
-          'value': _useMetric.toString(),
-        },
+      await ScenarioPreferencesService.saveBoolPreference(
+        _locationChannel,
+        key: _useMetricPreferenceKey,
+        value: _useMetric,
       );
     } catch (_) {
       // Keep local value even if persistence fails.
@@ -1030,12 +964,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final List<JobLog> loadedLogs = decoded
           .whereType<Map<String, dynamic>>()
           .map((Map<String, dynamic> item) {
-        final int timestampMillis =
-            ((item['timestamp'] as num?)?.toInt() ??
-                DateTime.now().millisecondsSinceEpoch);
+        final int timestampMillis = ((item['timestamp'] as num?)?.toInt() ??
+            DateTime.now().millisecondsSinceEpoch);
         return JobLog(
           name: (item['name'] ?? item['siteName'] ?? item['address'] ?? '')
-            .toString(),
+              .toString(),
           address: (item['address'] ?? '').toString(),
           notes: (item['notes'] ?? '').toString(),
           lat: ((item['lat'] as num?)?.toDouble() ?? 0),
@@ -1080,9 +1013,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
 
     try {
-      final String? raw = await _locationChannel.invokeMethod<String>(
-        'loadPreference',
-        <String, dynamic>{'key': _deletedLogKeysPreferenceKey},
+      final String? raw = await ScenarioPreferencesService.loadStringPreference(
+        _locationChannel,
+        key: _deletedLogKeysPreferenceKey,
       );
 
       if (raw != null && raw.trim().isNotEmpty) {
@@ -1102,12 +1035,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _saveDeletedLogKeys() async {
     try {
-      await _locationChannel.invokeMethod<void>(
-        'savePreference',
-        <String, dynamic>{
-          'key': _deletedLogKeysPreferenceKey,
-          'value': jsonEncode(_deletedLogKeys.toList()),
-        },
+      await ScenarioPreferencesService.saveStringPreference(
+        _locationChannel,
+        key: _deletedLogKeysPreferenceKey,
+        value: jsonEncode(_deletedLogKeys.toList()),
       );
     } catch (_) {
       // Keep local behavior if preference storage is unavailable.
@@ -1147,8 +1078,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
     _promptTimer?.cancel();
     _isTracking = true;
     _status = _sites.isEmpty
-      ? 'Tracking started. No locations configured yet. Add locations from the Locations tab.'
-      : 'Tracking started. Reading live GPS signal...';
+        ? 'Tracking started. No locations configured yet. Add locations from the Locations tab.'
+        : 'Tracking started. Reading live GPS signal...';
 
     _scheduleNextPoll(immediate: true);
     setState(() {});
@@ -1217,20 +1148,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return false;
     }
 
-    bool serviceEnabled = false;
-    try {
-      serviceEnabled = (await _locationChannel
-              .invokeMethod<bool>('isLocationServiceEnabled')) ??
-          false;
-    } on PlatformException {
-      serviceEnabled = false;
-    }
+    final bool serviceEnabled =
+        await LocationPermissionService.isLocationServiceEnabled(
+      _locationChannel,
+    );
 
     if (!serviceEnabled) {
       setState(() {
         _status = 'Location services are off. Turn on GPS and try again.';
       });
-      final bool shouldOpen = await ScenarioDialogService.showGoToSettingsDialog(
+      final bool shouldOpen =
+          await ScenarioDialogService.showGoToSettingsDialog(
         context,
         title: 'Location Services Off',
         message: 'GPS is turned off. Open Location settings now?',
@@ -1241,15 +1169,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return false;
     }
 
-    final bool granted = (await _locationChannel
-            .invokeMethod<bool>('checkAndRequestPermission')) ??
-        false;
+    final bool granted =
+        await LocationPermissionService.checkAndRequestPermission(
+      _locationChannel,
+    );
     if (!granted) {
       setState(() {
         _status =
             'Location permission denied. Allow location access to start tracking.';
       });
-      final bool shouldOpen = await ScenarioDialogService.showGoToSettingsDialog(
+      final bool shouldOpen =
+          await ScenarioDialogService.showGoToSettingsDialog(
         context,
         title: 'Location Permission Needed',
         message:
@@ -1261,15 +1191,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return false;
     }
 
-    final bool backgroundGranted = (await _locationChannel
-            .invokeMethod<bool>('hasBackgroundLocationPermission')) ??
-        false;
+    final bool backgroundGranted =
+        await LocationPermissionService.hasBackgroundLocationPermission(
+      _locationChannel,
+    );
     if (!backgroundGranted) {
       setState(() {
         _status =
             'For app-closed geofencing, set Location permission to "Allow all the time" in Android settings.';
       });
-      final bool shouldOpen = await ScenarioDialogService.showGoToSettingsDialog(
+      final bool shouldOpen =
+          await ScenarioDialogService.showGoToSettingsDialog(
         context,
         title: 'Background Location Needed',
         message:
@@ -1286,7 +1218,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _openLocationSettings() async {
     try {
-      await _locationChannel.invokeMethod<bool>('openLocationSettings');
+      await LocationPermissionService.openLocationSettings(_locationChannel);
     } catch (_) {
       if (!mounted) {
         return;
@@ -1299,7 +1231,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _openAppSettings() async {
     try {
-      await _locationChannel.invokeMethod<bool>('openAppSettings');
+      await LocationPermissionService.openAppSettings(_locationChannel);
     } catch (_) {
       if (!mounted) {
         return;
@@ -1327,9 +1259,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
       }
 
       setState(() {
-        _lastRawGpsPayload = position == null
-            ? null
-            : Map<Object?, Object?>.from(position);
+        _lastRawGpsPayload =
+            position == null ? null : Map<Object?, Object?>.from(position);
         _lastRawGpsPayloadAt = DateTime.now();
         _lastRawGpsReadError = null;
       });
@@ -1369,7 +1300,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
       setState(() {
         _lastRawGpsReadError =
             '${error.code}: ${error.message ?? 'unknown error'}';
-        _status = 'GPS error (${error.code}): ${error.message ?? 'unknown error'}';
+        _status =
+            'GPS error (${error.code}): ${error.message ?? 'unknown error'}';
       });
     } catch (_) {
       if (!mounted || !_isTracking) {
@@ -1613,7 +1545,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
     if (site == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No nearby site available to retrigger.')),
+          const SnackBar(
+              content: Text('No nearby site available to retrigger.')),
         );
       }
       setState(() {
@@ -1631,7 +1564,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _status =
           'Retrigger restarted for ${site.address}. Stay in geofence for ${site.requiredDwellMinutes} min to log again.';
     });
-            unawaited(_saveTrackingRuntimeState());
+    unawaited(_saveTrackingRuntimeState());
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1833,7 +1766,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
         const SnackBar(content: Text('Looking up latitude/longitude...')),
       );
 
-      final GeocodePoint? point = await LocationGeocodingService.lookupCoordinates(
+      final GeocodePoint? point =
+          await LocationGeocodingService.lookupCoordinates(
         result,
       );
       if (!mounted) {
@@ -1961,7 +1895,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
   }
 
-
   Future<void> _onAddFromCurrentLocation() async {
     if (_sites.length >= _maxSavedLocations || _isFetchingCurrentLocation) {
       if (!mounted) {
@@ -2009,10 +1942,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
       const SnackBar(content: Text('Looking up address from GPS...')),
     );
     final AddLocationInput? reversePrefill =
-      await LocationGeocodingService.reverseLookupAddress(
+        await LocationGeocodingService.reverseLookupAddress(
       fix,
       defaultRequiredMinutes:
-        _logMinuteOptions.contains(20) ? 20 : _logMinuteOptions.first,
+          _logMinuteOptions.contains(20) ? 20 : _logMinuteOptions.first,
     );
     if (!mounted) {
       return;
@@ -2020,7 +1953,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
     AddLocationInput? prefill = reversePrefill ??
-      AddLocationInput(
+        AddLocationInput(
           name: '',
           street: '',
           city: '',
@@ -2071,7 +2004,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Verifying address coordinates...')),
       );
-      final GeocodePoint? point = await LocationGeocodingService.lookupCoordinates(
+      final GeocodePoint? point =
+          await LocationGeocodingService.lookupCoordinates(
         result,
       );
       if (!mounted) {
@@ -2176,7 +2110,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
             content: Text('Looking up updated latitude/longitude...')),
       );
 
-      final GeocodePoint? point = await LocationGeocodingService.lookupCoordinates(
+      final GeocodePoint? point =
+          await LocationGeocodingService.lookupCoordinates(
         result,
       );
       if (!mounted) {
@@ -2218,7 +2153,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onDeleteLocation(int index, JobSite site) async {
-    final bool confirmDelete = await ScenarioDialogService.confirmDeleteLocation(
+    final bool confirmDelete =
+        await ScenarioDialogService.confirmDeleteLocation(
       context,
       siteName: site.name,
     );
@@ -2266,7 +2202,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _pendingSite = null;
       _promptCountdown = 0;
       _state.clearTrackingRuntimeState();
-      _status = 'All locations were reset. Add locations from the Locations tab.';
+      _status =
+          'All locations were reset. Add locations from the Locations tab.';
     });
 
     unawaited(_saveSites());
@@ -2276,7 +2213,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onDeleteLogEntry(int index, JobLog log) async {
-    final bool confirmDelete = await ScenarioDialogService.confirmDeleteLogEntry(
+    final bool confirmDelete =
+        await ScenarioDialogService.confirmDeleteLogEntry(
       context,
       address: log.address,
     );
@@ -2363,321 +2301,105 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Widget _buildSettingsScreen() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
-        Card(
-          child: SwitchListTile(
-            title: const Text('Debug Mode'),
-            subtitle: const Text('Show or hide the Debug tab and tools.'),
-            value: _debugModeEnabled,
-            onChanged: (bool enabled) {
-              setState(() {
-                _debugModeEnabled = enabled;
-                if (!_debugModeEnabled && _selectedTabIndex == 3) {
-                  _selectedTabIndex = 2;
-                }
-              });
-              unawaited(_locationChannel.invokeMethod<void>(
-                'savePreference',
-                <String, dynamic>{
-                  'key': _debugModePreferenceKey,
-                  'value': enabled.toString(),
-                },
-              ));
-            },
+    return SettingsScreenView(
+      debugModeEnabled: _debugModeEnabled,
+      onDebugModeChanged: (bool enabled) {
+        setState(() {
+          _debugModeEnabled = enabled;
+          if (!_debugModeEnabled && _selectedTabIndex == 3) {
+            _selectedTabIndex = 2;
+          }
+        });
+        unawaited(
+          ScenarioPreferencesService.saveBoolPreference(
+            _locationChannel,
+            key: _debugModePreferenceKey,
+            value: enabled,
           ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: SwitchListTile(
-            title: const Text('Dark Theme'),
-            subtitle: const Text('Toggle between light and dark mode.'),
-            value: widget.isDarkMode,
-            onChanged: widget.onDarkModeChanged,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: SwitchListTile(
-            title: const Text('Units'),
-            subtitle: Text(_useMetric ? 'Metric (m, m/s)' : 'English (ft, mph)'),
-            value: _useMetric,
-            onChanged: (bool value) {
-              setState(() {
-                _useMetric = value;
-              });
-              unawaited(_saveUnitPreference());
-              _refreshNearestUiFromCurrentFix();
-            },
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'Font Size',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Current: ${widget.fontScale.toStringAsFixed(2)}x',
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: <Widget>[
-                    OutlinedButton.icon(
-                      onPressed: widget.fontScale <= widget.minFontScale
-                          ? null
-                          : () {
-                              widget.onFontScaleChanged(
-                                widget.fontScale - widget.fontScaleStep,
-                              );
-                            },
-                      icon: const Icon(Icons.remove),
-                      label: const Text('Decrease'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: widget.fontScale >= widget.maxFontScale
-                          ? null
-                          : () {
-                              widget.onFontScaleChanged(
-                                widget.fontScale + widget.fontScaleStep,
-                              );
-                            },
-                      icon: const Icon(Icons.add),
-                      label: const Text('Increase'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'Tracking Controls',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 10),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Tracking On'),
-                  subtitle: Text(
-                    _isTracking
-                        ? 'Tracking is active.'
-                        : (_trackingEnabledPreference
-                            ? 'Tracking did not start. $_status'
-                            : 'Tracking is stopped.'),
-                  ),
-                  value: _isTracking,
-                  onChanged: _isChangingTrackingState
-                      ? null
-                      : (bool value) {
-                    unawaited(_onTrackingToggleChanged(value));
-                  },
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  _isTracking
-                      ? 'Current polling: ${_formatSecondsOption(_activePollSeconds())} (${_pollingModeSummary()} mode).'
-                      : 'Close polling uses ${_formatSecondsOption(_closePollSeconds)}. Far polling uses ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.',
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'Polling Behavior',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<int>(
-                  initialValue: _closePollSeconds,
-                  decoration: const InputDecoration(
-                    labelText: 'Poll when close to a location',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: _closePollSecondOptions
-                      .map(
-                        (int value) => DropdownMenuItem<int>(
-                          value: value,
-                          child: Text(_formatSecondsOption(value)),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (int? value) {
-                    if (value == null) {
-                      return;
-                    }
-                    setState(() {
-                      _closePollSeconds = value;
-                    });
-                    unawaited(_savePollingPreferences());
-                    if (_isTracking) {
-                      _scheduleNextPoll(immediate: true);
-                    }
-                    _refreshNearestUiFromCurrentFix();
-                  },
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<int>(
-                  initialValue: _farPollSeconds,
-                  decoration: const InputDecoration(
-                    labelText: 'Poll when far from any location',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: _farPollSecondOptions
-                      .map(
-                        (int value) => DropdownMenuItem<int>(
-                          value: value,
-                          child: Text(_formatSecondsOption(value)),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (int? value) {
-                    if (value == null) {
-                      return;
-                    }
-                    setState(() {
-                      _farPollSeconds = value;
-                    });
-                    unawaited(_savePollingPreferences());
-                    if (_isTracking) {
-                      _scheduleNextPoll(immediate: true);
-                    }
-                    _refreshNearestUiFromCurrentFix();
-                  },
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<int>(
-                  initialValue: _farDistanceMeters,
-                  decoration: const InputDecoration(
-                    labelText: 'Consider far from locations at',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: _farDistanceMeterOptions
-                      .map(
-                        (int value) => DropdownMenuItem<int>(
-                          value: value,
-                          child: Text(_formatMetersOption(value)),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (int? value) {
-                    if (value == null) {
-                      return;
-                    }
-                    setState(() {
-                      _farDistanceMeters = value;
-                    });
-                    unawaited(_savePollingPreferences());
-                    if (_isTracking) {
-                      _scheduleNextPoll(immediate: true);
-                    }
-                    _refreshNearestUiFromCurrentFix();
-                  },
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<int>(
-                  initialValue: _outOfGeofenceRetriggerMinutes,
-                  decoration: const InputDecoration(
-                    labelText: 'Out-of-geofence retrigger',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: _outOfGeofenceRetriggerMinuteOptions
-                      .map(
-                        (int value) => DropdownMenuItem<int>(
-                          value: value,
-                          child: Text(
-                            value == 60 ? '1 hr' : '$value min',
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (int? value) {
-                    if (value == null) {
-                      return;
-                    }
-                    setState(() {
-                      _outOfGeofenceRetriggerMinutes = value;
-                    });
-                    unawaited(_savePollingPreferences());
-                    _refreshNearestUiFromCurrentFix();
-                  },
-                ),
-                const SizedBox(height: 10),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Hide nearest when far'),
-                  subtitle: Text(
-                    'Hide nearest-location details when distance is beyond ${_formatMetersOption(_farDistanceMeters)}.',
-                  ),
-                  value: _hideNearestWhenFar,
-                  onChanged: (bool value) {
-                    setState(() {
-                      _hideNearestWhenFar = value;
-                    });
-                    unawaited(_savePollingPreferences());
-                    _refreshNearestUiFromCurrentFix();
-                  },
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'Permission Shortcuts',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: <Widget>[
-                    OutlinedButton.icon(
-                      onPressed: _openLocationSettings,
-                      icon: const Icon(Icons.gps_fixed),
-                      label: const Text('Location Settings'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _openAppSettings,
-                      icon: const Icon(Icons.admin_panel_settings_outlined),
-                      label: const Text('App Permissions'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
+        );
+      },
+      isDarkMode: widget.isDarkMode,
+      onDarkModeChanged: widget.onDarkModeChanged,
+      useMetric: _useMetric,
+      onUseMetricChanged: (bool value) {
+        setState(() {
+          _useMetric = value;
+        });
+        unawaited(_saveUnitPreference());
+        _refreshNearestUiFromCurrentFix();
+      },
+      fontScale: widget.fontScale,
+      minFontScale: widget.minFontScale,
+      maxFontScale: widget.maxFontScale,
+      fontScaleStep: widget.fontScaleStep,
+      onFontScaleChanged: widget.onFontScaleChanged,
+      isTracking: _isTracking,
+      trackingEnabledPreference: _trackingEnabledPreference,
+      isChangingTrackingState: _isChangingTrackingState,
+      status: _status,
+      trackingSummary: _isTracking
+          ? 'Current polling: ${_formatSecondsOption(_activePollSeconds())} (${_pollingModeSummary()} mode).'
+          : 'Close polling uses ${_formatSecondsOption(_closePollSeconds)}. Far polling uses ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.',
+      onTrackingToggleChanged: (bool value) {
+        unawaited(_onTrackingToggleChanged(value));
+      },
+      closePollSeconds: _closePollSeconds,
+      farPollSeconds: _farPollSeconds,
+      farDistanceMeters: _farDistanceMeters,
+      outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
+      closePollSecondOptions: _closePollSecondOptions,
+      farPollSecondOptions: _farPollSecondOptions,
+      farDistanceMeterOptions: _farDistanceMeterOptions,
+      outOfGeofenceRetriggerMinuteOptions: _outOfGeofenceRetriggerMinuteOptions,
+      hideNearestWhenFar: _hideNearestWhenFar,
+      onClosePollSecondsChanged: (int value) {
+        setState(() {
+          _closePollSeconds = value;
+        });
+        unawaited(_savePollingPreferences());
+        if (_isTracking) {
+          _scheduleNextPoll(immediate: true);
+        }
+        _refreshNearestUiFromCurrentFix();
+      },
+      onFarPollSecondsChanged: (int value) {
+        setState(() {
+          _farPollSeconds = value;
+        });
+        unawaited(_savePollingPreferences());
+        if (_isTracking) {
+          _scheduleNextPoll(immediate: true);
+        }
+        _refreshNearestUiFromCurrentFix();
+      },
+      onFarDistanceMetersChanged: (int value) {
+        setState(() {
+          _farDistanceMeters = value;
+        });
+        unawaited(_savePollingPreferences());
+        if (_isTracking) {
+          _scheduleNextPoll(immediate: true);
+        }
+        _refreshNearestUiFromCurrentFix();
+      },
+      onOutOfGeofenceRetriggerMinutesChanged: (int value) {
+        setState(() {
+          _outOfGeofenceRetriggerMinutes = value;
+        });
+        unawaited(_savePollingPreferences());
+        _refreshNearestUiFromCurrentFix();
+      },
+      onHideNearestWhenFarChanged: (bool value) {
+        setState(() {
+          _hideNearestWhenFar = value;
+        });
+        unawaited(_savePollingPreferences());
+        _refreshNearestUiFromCurrentFix();
+      },
+      formatSecondsOption: _formatSecondsOption,
+      formatMetersOption: _formatMetersOption,
+      onOpenLocationSettings: _openLocationSettings,
+      onOpenAppSettings: _openAppSettings,
     );
   }
 
@@ -2777,7 +2499,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       ? null
                       : () async {
                           final bool shouldContinue =
-                              await ScenarioDialogService.confirmAddLocationAction(
+                              await ScenarioDialogService
+                                  .confirmAddLocationAction(
                             context,
                             useCurrentLocation: true,
                           );
@@ -2801,7 +2524,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       ? null
                       : () async {
                           final bool shouldContinue =
-                              await ScenarioDialogService.confirmAddLocationAction(
+                              await ScenarioDialogService
+                                  .confirmAddLocationAction(
                             context,
                             useCurrentLocation: false,
                           );
@@ -2861,4 +2585,3 @@ class _ScenarioPageState extends State<ScenarioPage> {
     );
   }
 }
-
