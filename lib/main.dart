@@ -691,6 +691,45 @@ class _ScenarioPageState extends State<ScenarioPage> {
         'Active dwell timers: ${_dwellMinutes.length}';
   }
 
+  String _appReadinessDebugSummary() {
+    final String lastFix =
+        _lastFixAt == null ? 'none' : _formatLogTimestamp(_lastFixAt!);
+
+    return 'App readiness\n'
+        'Tracking running: $_isTracking\n'
+        'Tracking preference enabled: $_trackingEnabledPreference\n'
+        'Loaded flags: trackingPref=$_trackingPreferenceLoaded, runtimeState=$_trackingRuntimeStateLoaded, sites=$_sitesLoaded\n'
+        'Auto-start attempted: $_autoStartTrackingAttempted\n'
+        'Changing tracking state: $_isChangingTrackingState\n'
+        'Fetching current location: $_isFetchingCurrentLocation\n'
+        'Timers active: poll=${_trackingTimer != null}, prompt=${_promptTimer != null}\n'
+        'Last accepted fix: $lastFix\n'
+        'Sites: ${_sites.length}, Logs: ${_logs.length}, Deleted log keys: ${_deletedLogKeys.length}';
+  }
+
+  String _geofenceDecisionDebugSummary() {
+    final LocationFix? fix = _currentFix;
+    final SiteDistance? nearest = _latestNearest;
+    final String nearestLine = nearest == null
+        ? 'Nearest: unavailable'
+        : 'Nearest: ${nearest.site.name} @ ${_fmtDist(nearest.distanceMeters)}';
+
+    final String fixLine = fix == null
+        ? 'Fix: unavailable'
+        : 'Fix: acc=${_fmtAccuracy(fix.accuracyMeters)}, speed=${fix.speedMetersPerSecond.toStringAsFixed(2)} m/s';
+
+    final String pending = _pendingSite?.name ?? 'none';
+    final String candidate = _candidateSite?.name ?? 'none';
+
+    return 'Geofence decision snapshot\n'
+        '$nearestLine\n'
+        '$fixLine\n'
+        'Stable samples: $_stableSamples / $_requiredStableSamples\n'
+        'Candidate: $candidate\n'
+        'Pending prompt: $pending (countdown: $_promptCountdown s)\n'
+        'Out-of-geofence timers: ${_outOfGeofenceSince.length}';
+  }
+
   bool _shouldHideNearestInfo(SiteDistance nearest) {
     return _hideNearestWhenFar && nearest.distanceMeters > _farDistanceMeters;
   }
@@ -2418,6 +2457,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
       showBatteryInfo: _showBatteryInfo,
       onShowBatteryInfoChanged: _setShowBatteryInfo,
       pollingDebugSummary: _pollingDebugSummary(),
+      appReadinessDebugSummary: _appReadinessDebugSummary(),
+      geofenceDecisionDebugSummary: _geofenceDecisionDebugSummary(),
       rawGpsDebugSummary: _rawGpsDebugSummary(),
       trackingRuntimeStateDebugSummary: _trackingRuntimeStateDebugSummary(),
       locationTrackingStatesDebugSummary: _locationTrackingStatesDebugSummary(),

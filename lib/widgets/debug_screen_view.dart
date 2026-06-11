@@ -9,6 +9,8 @@ class DebugScreenView extends StatelessWidget {
     required this.showBatteryInfo,
     required this.onShowBatteryInfoChanged,
     required this.pollingDebugSummary,
+    required this.appReadinessDebugSummary,
+    required this.geofenceDecisionDebugSummary,
     required this.rawGpsDebugSummary,
     required this.trackingRuntimeStateDebugSummary,
     required this.locationTrackingStatesDebugSummary,
@@ -27,6 +29,8 @@ class DebugScreenView extends StatelessWidget {
   final bool showBatteryInfo;
   final ValueChanged<bool> onShowBatteryInfoChanged;
   final String pollingDebugSummary;
+  final String appReadinessDebugSummary;
+  final String geofenceDecisionDebugSummary;
   final String rawGpsDebugSummary;
   final String trackingRuntimeStateDebugSummary;
   final String locationTrackingStatesDebugSummary;
@@ -65,6 +69,20 @@ class DebugScreenView extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Text(pollingDebugSummary),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(appReadinessDebugSummary),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(geofenceDecisionDebugSummary),
           ),
         ),
         const SizedBox(height: 12),
@@ -131,8 +149,9 @@ class DebugScreenView extends StatelessWidget {
                     runSpacing: 8,
                     children: <Widget>[
                       FilledButton.icon(
-                        onPressed:
-                            isLoadingBatteryUsage ? null : onRefreshBatteryUsage,
+                        onPressed: isLoadingBatteryUsage
+                            ? null
+                            : onRefreshBatteryUsage,
                         icon: const Icon(Icons.refresh),
                         label: const Text('Refresh Battery Usage'),
                       ),
