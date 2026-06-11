@@ -5,11 +5,19 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 
 import 'models/lokalog_models.dart';
+import 'services/battery_usage_service.dart';
+import 'services/log_communication_service.dart';
+import 'services/location_geocoding_service.dart';
 import 'services/location_tracking_calculator.dart';
+import 'services/scenario_dialog_service.dart';
+import 'services/scenario_state_controller.dart';
 import 'services/tracking_controller.dart';
+import 'widgets/add_location_sheet.dart';
+import 'widgets/debug_screen_view.dart';
+import 'widgets/log_screen_view.dart';
+import 'widgets/locations_screen_view.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -221,11 +229,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   static const String _deletedLogKeysPreferenceKey =
       'deleted_background_log_keys_v1';
 
-  final List<JobSite> _sites = <JobSite>[];
-  final List<JobLog> _logs = <JobLog>[];
-  final Set<String> _deletedLogKeys = <String>{};
-  final Set<String> _sessionLoggedAddresses = <String>{};
-  final Map<String, double> _dwellMinutes = <String, double>{};
+  final ScenarioStateController _state = ScenarioStateController();
   bool _deletedLogKeysLoaded = false;
   bool _autoStartTrackingAttempted = false;
   bool _trackingOffStartupDialogShown = false;
@@ -262,7 +266,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
   JobSite? _candidateSite;
   JobSite? _pendingSite;
   int _promptCountdown = 0;
-  final Map<String, DateTime> _outOfGeofenceSince = <String, DateTime>{};
 
   bool _isLoadingBatteryUsage = false;
   bool _usageAccessGranted = false;
@@ -277,6 +280,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
   DateTime? _trackingRuntimeStateLoadedAt;
   DateTime? _trackingRuntimeStateSavedAt;
   List<DebugBatteryAppUsage> _batteryUsage = <DebugBatteryAppUsage>[];
+
+  List<JobSite> get _sites => _state.sites;
+  List<JobLog> get _logs => _state.logs;
+  Set<String> get _deletedLogKeys => _state.deletedLogKeys;
+  Set<String> get _sessionLoggedAddresses => _state.sessionLoggedAddresses;
+  Map<String, double> get _dwellMinutes => _state.dwellMinutes;
+  Map<String, DateTime> get _outOfGeofenceSince => _state.outOfGeofenceSince;
 
   @override
   void initState() {
@@ -354,59 +364,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
       if (raw != null && raw.trim().isNotEmpty) {
         final dynamic decoded = jsonDecode(raw);
         if (decoded is Map<String, dynamic>) {
-          final List<String> loggedAddresses =
-              ((decoded['sessionLoggedAddresses'] as List<dynamic>?) ??
-                      <dynamic>[])
-                  .whereType<String>()
-                  .toList();
-
-          final Map<String, double> dwellMinutes = <String, double>{};
-          final dynamic dwellRaw = decoded['dwellMinutes'];
-          if (dwellRaw is Map<String, dynamic>) {
-            dwellRaw.forEach((String key, dynamic value) {
-              final double? parsed = (value as num?)?.toDouble();
-              if (parsed != null && parsed >= 0) {
-                dwellMinutes[key] = parsed;
-              }
-            });
-          }
-
-          final Map<String, DateTime> outOfGeofenceSince = <String, DateTime>{};
-          final dynamic outRaw = decoded['outOfGeofenceSince'];
-          if (outRaw is Map<String, dynamic>) {
-            outRaw.forEach((String key, dynamic value) {
-              final int? epochMillis = (value as num?)?.toInt();
-              if (epochMillis != null && epochMillis > 0) {
-                outOfGeofenceSince[key] =
-                    DateTime.fromMillisecondsSinceEpoch(epochMillis);
-              }
-            });
-          }
-
+          _state.restoreTrackingRuntimeStateFromJson(decoded);
           if (mounted) {
             setState(() {
-              _sessionLoggedAddresses
-                ..clear()
-                ..addAll(loggedAddresses);
-              _dwellMinutes
-                ..clear()
-                ..addAll(dwellMinutes);
-              _outOfGeofenceSince
-                ..clear()
-                ..addAll(outOfGeofenceSince);
               _trackingRuntimeStateLoaded = true;
               _trackingRuntimeStateLoadedAt = DateTime.now();
             });
           } else {
-            _sessionLoggedAddresses
-              ..clear()
-              ..addAll(loggedAddresses);
-            _dwellMinutes
-              ..clear()
-              ..addAll(dwellMinutes);
-            _outOfGeofenceSince
-              ..clear()
-              ..addAll(outOfGeofenceSince);
             _trackingRuntimeStateLoaded = true;
             _trackingRuntimeStateLoadedAt = DateTime.now();
           }
@@ -425,16 +389,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Future<void> _saveTrackingRuntimeState() async {
     try {
-      final Map<String, dynamic> payload = <String, dynamic>{
-        'sessionLoggedAddresses': _sessionLoggedAddresses.toList(),
-        'dwellMinutes': <String, double>{..._dwellMinutes},
-        'outOfGeofenceSince': _outOfGeofenceSince.map(
-          (String key, DateTime value) => MapEntry<String, int>(
-            key,
-            value.millisecondsSinceEpoch,
-          ),
-        ),
-      };
+      final Map<String, dynamic> payload =
+          _state.buildTrackingRuntimeStatePayload();
 
       await _locationChannel.invokeMethod<void>(
         'savePreference',
@@ -964,37 +920,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return;
     }
     _trackingOffStartupDialogShown = true;
-    await _showTrackingOffStartupDialog();
-  }
+    final bool openSettings =
+        await ScenarioDialogService.showTrackingOffStartupDialog(context);
 
-  Future<void> _showTrackingOffStartupDialog() async {
-    final bool? openSettings = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Tracking Is Off'),
-          content: const Text(
-            'Tracking is currently off.\n\n'
-            'To turn it on:\n'
-            '1. Open the Settings tab.\n'
-            '2. In Tracking Controls, switch Tracking On.\n'
-            '3. Allow location permissions and location services if prompted.',
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Later'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Open Settings'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (openSettings == true && mounted) {
+    if (openSettings && mounted) {
       setState(() {
         _selectedTabIndex = 2;
       });
@@ -1019,65 +948,19 @@ class _ScenarioPageState extends State<ScenarioPage> {
     });
 
     try {
-      final bool hasUsageAccess = (await _locationChannel
-              .invokeMethod<bool>('hasUsageAccessPermission')) ??
-          false;
-
-      if (!hasUsageAccess) {
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _usageAccessGranted = false;
-          _batteryUsage = <DebugBatteryAppUsage>[];
-          _batteryUsageError =
-              'Usage access is required. Open Settings and allow Usage Access for this app.';
-        });
-        return;
-      }
-
-      final Map<Object?, Object?>? payload = await _locationChannel
-          .invokeMethod<Map<Object?, Object?>>('getAppBatteryUsage');
+      final BatteryUsageLoadResult result =
+          await BatteryUsageService.loadBatteryUsage(_locationChannel);
 
       if (!mounted) {
         return;
       }
 
-      final List<dynamic> rawApps =
-          (payload?['apps'] as List<dynamic>?) ?? <dynamic>[];
-      final List<DebugBatteryAppUsage> parsed = rawApps
-          .whereType<Map<Object?, Object?>>()
-          .map((Map<Object?, Object?> item) {
-            return DebugBatteryAppUsage(
-              packageName: (item['packageName'] ?? '').toString(),
-              appName: (item['appName'] ?? '').toString(),
-              foregroundMinutes:
-                  ((item['foregroundMinutes'] as num?)?.toDouble() ?? 0),
-              estimatedBatterySharePercent:
-                  ((item['estimatedBatterySharePercent'] as num?)?.toDouble() ??
-                      0),
-            );
-          })
-          .where((DebugBatteryAppUsage item) => item.foregroundMinutes > 0)
-          .toList();
-
       setState(() {
-        _usageAccessGranted = true;
-        _batteryUsage = parsed;
-        _deviceBatteryLevel = (payload?['deviceBatteryLevel'] as num?)?.toInt();
-        final int generatedAtEpochMs =
-            (payload?['generatedAtEpochMs'] as num?)?.toInt() ??
-                DateTime.now().millisecondsSinceEpoch;
-        _batteryUsageFetchedAt =
-            DateTime.fromMillisecondsSinceEpoch(generatedAtEpochMs);
-      });
-    } on PlatformException catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _batteryUsageError =
-            error.message ?? 'Could not load app battery usage.';
+        _usageAccessGranted = result.usageAccessGranted;
+        _batteryUsage = result.batteryUsage;
+        _deviceBatteryLevel = result.deviceBatteryLevel;
+        _batteryUsageFetchedAt = result.batteryUsageFetchedAt;
+        _batteryUsageError = result.errorMessage;
       });
     } catch (_) {
       if (!mounted) {
@@ -1097,17 +980,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _openUsageAccessSettings() async {
-    try {
-      final bool opened = await _locationChannel
-              .invokeMethod<bool>('openUsageAccessSettings') ??
-          false;
-      if (opened) {
-        return;
-      }
-      await _locationChannel.invokeMethod<bool>('openAppSettings');
-      if (!mounted) {
-        return;
-      }
+    final UsageAccessSettingsOpenResult result =
+        await BatteryUsageService.openUsageAccessSettings(_locationChannel);
+    if (!mounted) {
+      return;
+    }
+
+    if (result == UsageAccessSettingsOpenResult.openedUsageAccessSettings) {
+      return;
+    }
+
+    if (result == UsageAccessSettingsOpenResult.openedAppSettingsFallback) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -1115,10 +998,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
           ),
         ),
       );
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
+      return;
+    }
+
+    if (result == UsageAccessSettingsOpenResult.failed) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -1176,19 +1059,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
         return;
       }
 
-      final Set<String> existing = _logs
-          .map((JobLog log) =>
-              '${log.address}|${log.timestamp.millisecondsSinceEpoch}')
-          .toSet();
-
       setState(() {
-        for (final JobLog log in loadedLogs) {
-          final String key =
-              '${log.address}|${log.timestamp.millisecondsSinceEpoch}';
-          if (existing.add(key)) {
-            _logs.insert(0, log);
-          }
-        }
+        _state.mergeLoadedLogs(loadedLogs);
       });
     } catch (_) {
       // Ignore background log load errors; they are not fatal.
@@ -1283,32 +1155,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
     unawaited(_saveTrackingRuntimeState());
   }
 
-  Future<bool> _confirmStopTracking() async {
-    if (!mounted) {
-      return false;
-    }
-    final bool? shouldStop = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Stop Tracking?'),
-          content: const Text('Are you sure you want to turn tracking off?'),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Turn Off'),
-            ),
-          ],
-        );
-      },
-    );
-    return shouldStop == true;
-  }
-
   Future<void> _onTrackingToggleChanged(bool enabled) async {
     if (_isChangingTrackingState) {
       return;
@@ -1346,7 +1192,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
         return;
       }
 
-      final bool shouldStop = await _confirmStopTracking();
+      final bool shouldStop =
+          await ScenarioDialogService.confirmStopTracking(context);
       if (shouldStop) {
         _stopScenario();
         await _saveTrackingPreference(false);
@@ -1383,11 +1230,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
       setState(() {
         _status = 'Location services are off. Turn on GPS and try again.';
       });
-      await _showGoToSettingsDialog(
+      final bool shouldOpen = await ScenarioDialogService.showGoToSettingsDialog(
+        context,
         title: 'Location Services Off',
         message: 'GPS is turned off. Open Location settings now?',
-        openLocationSettings: true,
       );
+      if (shouldOpen) {
+        await _openLocationSettings();
+      }
       return false;
     }
 
@@ -1399,12 +1249,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _status =
             'Location permission denied. Allow location access to start tracking.';
       });
-      await _showGoToSettingsDialog(
+      final bool shouldOpen = await ScenarioDialogService.showGoToSettingsDialog(
+        context,
         title: 'Location Permission Needed',
         message:
             'Location permission is required. Open app permission settings now?',
-        openLocationSettings: false,
       );
+      if (shouldOpen) {
+        await _openAppSettings();
+      }
       return false;
     }
 
@@ -1416,12 +1269,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
         _status =
             'For app-closed geofencing, set Location permission to "Allow all the time" in Android settings.';
       });
-      await _showGoToSettingsDialog(
+      final bool shouldOpen = await ScenarioDialogService.showGoToSettingsDialog(
+        context,
         title: 'Background Location Needed',
         message:
             'To log when the app is closed, set Location to "Allow all the time". Open app settings now?',
-        openLocationSettings: false,
       );
+      if (shouldOpen) {
+        await _openAppSettings();
+      }
       return false;
     }
 
@@ -1451,46 +1307,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not open App settings.')),
       );
-    }
-  }
-
-  Future<void> _showGoToSettingsDialog({
-    required String title,
-    required String message,
-    required bool openLocationSettings,
-  }) async {
-    if (!mounted) {
-      return;
-    }
-
-    final bool? shouldOpen = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Not now'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Open Settings'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (shouldOpen != true) {
-      return;
-    }
-
-    if (openLocationSettings) {
-      await _openLocationSettings();
-    } else {
-      await _openAppSettings();
     }
   }
 
@@ -1613,18 +1429,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   void _onSitesChanged() {
-    final Set<String> validAddresses =
-        _sites.map((JobSite site) => site.address).toSet();
-
-    _sessionLoggedAddresses.removeWhere(
-      (String address) => !validAddresses.contains(address),
-    );
-    _dwellMinutes.removeWhere(
-      (String address, double _) => !validAddresses.contains(address),
-    );
-    _outOfGeofenceSince.removeWhere(
-      (String address, DateTime _) => !validAddresses.contains(address),
-    );
+    _state.pruneTrackingStateToKnownSites();
 
     if (_sites.isEmpty) {
       _latestNearest = null;
@@ -1749,8 +1554,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     final String cleanNotes = notes.trim();
 
-    _logs.insert(
-      0,
+    _state.addLog(
       JobLog(
         name: site.name,
         address: site.address,
@@ -1879,54 +1683,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
         '(${_fmtDist(nearest.distanceMeters, decimals: 0)}/${_fmtDist(effectiveRadius, decimals: 0)})';
   }
 
-  Future<_GeocodePoint?> _lookupCoordinates(_AddLocationInput input) async {
-    final String query =
-        '${input.street.trim()}, ${input.city.trim()}, ${input.state.trim()} ${input.zip.trim()}, USA';
-    final Uri uri = Uri.https(
-      'nominatim.openstreetmap.org',
-      '/search',
-      <String, String>{
-        'q': query,
-        'format': 'json',
-        'limit': '1',
-      },
-    );
-
-    try {
-      final http.Response response = await http.get(
-        uri,
-        headers: <String, String>{
-          'User-Agent': 'lokalog-app/1.0 (mobile field logging demo)',
-          'Accept': 'application/json',
-        },
-      ).timeout(const Duration(seconds: 12));
-
-      if (response.statusCode != 200) {
-        return null;
-      }
-
-      final dynamic decoded = jsonDecode(response.body);
-      if (decoded is! List<dynamic> || decoded.isEmpty) {
-        return null;
-      }
-
-      final dynamic first = decoded.first;
-      if (first is! Map<String, dynamic>) {
-        return null;
-      }
-
-      final double? lat = double.tryParse(first['lat']?.toString() ?? '');
-      final double? lng = double.tryParse(first['lon']?.toString() ?? '');
-      if (lat == null || lng == null) {
-        return null;
-      }
-
-      return _GeocodePoint(lat: lat, lng: lng);
-    } catch (_) {
-      return null;
-    }
-  }
-
   String _formatLogTimestamp(DateTime value) {
     const List<String> monthNames = <String>[
       'Jan',
@@ -1950,111 +1706,36 @@ class _ScenarioPageState extends State<ScenarioPage> {
         '$hour12:$minute $meridiem';
   }
 
-  String _buildShareTextForLog(JobLog log) {
-    final String clientName = log.name.trim().isEmpty ? 'Client' : log.name;
-    final String notesLine =
-      log.notes.trim().isEmpty ? '' : 'Notes: ${log.notes.trim()}\n';
-    return 'Lokalog Job Log\n'
-        'Customer: $clientName\n'
-        'Address: ${log.address}\n'
-        'Time: ${_formatLogTimestamp(log.timestamp)}\n'
-        'Confidence: ${log.confidence.toStringAsFixed(1)}%\n'
-      '$notesLine'
-        'Type: ${log.confirmedByUser ? 'confirmed' : 'auto-logged'}';
-  }
-
   Future<void> _shareLogEntry(JobLog log) async {
-    final String clientName = log.name.trim().isEmpty ? 'Client' : log.name;
-    await _shareText(
-      text: _buildShareTextForLog(log),
-      subject: 'Lokalog: $clientName',
+    await LogCommunicationService.shareLogEntry(
+      context: context,
+      channel: _locationChannel,
+      log: log,
+      formatLogTimestamp: _formatLogTimestamp,
     );
   }
 
-  Future<void> _shareText({
-    required String text,
-    required String subject,
-  }) async {
-    try {
-      await _locationChannel.invokeMethod<void>(
-        'shareText',
-        <String, dynamic>{
-          'text': text,
-          'subject': subject,
-        },
-      );
-    } on MissingPluginException {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Share is currently supported on Android only.'),
-        ),
-      );
-    } on PlatformException {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open share sheet.')),
-      );
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open share sheet.')),
-      );
-    }
-  }
-
   Future<void> _shareAllLogs() async {
-    if (_logs.isEmpty) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No logs available to share.')),
-      );
-      return;
-    }
-
-    final String joined = _logs
-        .map((JobLog log) => _buildShareTextForLog(log))
-        .join('\n\n----------------\n\n');
-
-    await _shareText(
-      text: joined,
-      subject: 'Lokalog: ${_logs.length} shared logs',
+    await LogCommunicationService.shareAllLogs(
+      context: context,
+      channel: _locationChannel,
+      logs: _logs,
+      formatLogTimestamp: _formatLogTimestamp,
     );
   }
 
   Future<void> _showLogReminderNotification(JobSite site, int countdown) async {
-    try {
-      await _locationChannel.invokeMethod<void>(
-        'showLogReminderNotification',
-        <String, dynamic>{
-          'name': site.name,
-          'address': site.address,
-          'countdownSeconds': countdown,
-        },
-      );
-    } on MissingPluginException {
-      // Notification reminder is Android-only in this build.
-    } on PlatformException {
-      // Keep core log flow even if notification fails.
-    }
+    await LogCommunicationService.showLogReminderNotification(
+      channel: _locationChannel,
+      site: site,
+      countdown: countdown,
+    );
   }
 
   Future<void> _cancelLogReminderNotification() async {
-    try {
-      await _locationChannel.invokeMethod<void>('cancelLogReminderNotification');
-    } on MissingPluginException {
-      // Notification reminder is Android-only in this build.
-    } on PlatformException {
-      // Ignore cancellation errors.
-    }
+    await LogCommunicationService.cancelLogReminderNotification(
+      channel: _locationChannel,
+    );
   }
 
   String get _appBarSectionTitle {
@@ -2083,7 +1764,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return Icons.bug_report;
   }
 
-  bool _hasMissingRequiredLocationFields(_AddLocationInput input) {
+  bool _hasMissingRequiredLocationFields(AddLocationInput input) {
     return input.name.trim().isEmpty ||
         input.street.trim().isEmpty ||
         input.city.trim().isEmpty ||
@@ -2092,20 +1773,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   bool _isDuplicateLocationName(String name, {int? excludingIndex}) {
-    final String normalized = name.trim().toLowerCase();
-    if (normalized.isEmpty) {
-      return false;
-    }
-
-    for (int i = 0; i < _sites.length; i++) {
-      if (excludingIndex != null && i == excludingIndex) {
-        continue;
-      }
-      if (_sites[i].name.trim().toLowerCase() == normalized) {
-        return true;
-      }
-    }
-    return false;
+    return _state.isDuplicateLocationName(
+      name,
+      excludingIndex: excludingIndex,
+    );
   }
 
   Future<void> _onAddNewLocation() async {
@@ -2123,16 +1794,16 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return;
     }
 
-    _AddLocationInput? prefill;
+    AddLocationInput? prefill;
     String? sheetError;
 
     while (true) {
-      final _AddLocationInput? result =
-          await showModalBottomSheet<_AddLocationInput>(
+      final AddLocationInput? result =
+          await showModalBottomSheet<AddLocationInput>(
         context: context,
         isScrollControlled: true,
         builder: (BuildContext sheetContext) {
-          return _AddLocationSheet(
+          return AddLocationSheet(
             title: 'Add New Location',
             submitLabel: 'Add',
             logMinuteOptions: _logMinuteOptions,
@@ -2162,7 +1833,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
         const SnackBar(content: Text('Looking up latitude/longitude...')),
       );
 
-      final _GeocodePoint? point = await _lookupCoordinates(result);
+      final GeocodePoint? point = await LocationGeocodingService.lookupCoordinates(
+        result,
+      );
       if (!mounted) {
         return;
       }
@@ -2201,7 +1874,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       }
 
       setState(() {
-        _sites.add(newSite);
+        _state.addSite(newSite);
       });
       unawaited(_saveSites());
       _onSitesChanged();
@@ -2288,167 +1961,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
   }
 
-  Future<_AddLocationInput?> _reverseLookupAddress(LocationFix fix) async {
-    final Uri uri = Uri.https(
-      'nominatim.openstreetmap.org',
-      '/reverse',
-      <String, String>{
-        'lat': fix.lat.toString(),
-        'lon': fix.lng.toString(),
-        'format': 'jsonv2',
-        'addressdetails': '1',
-      },
-    );
-
-    try {
-      final http.Response response = await http.get(
-        uri,
-        headers: <String, String>{
-          'User-Agent': 'lokalog-app/1.0 (mobile field logging demo)',
-          'Accept': 'application/json',
-        },
-      ).timeout(const Duration(seconds: 12));
-
-      if (response.statusCode != 200) {
-        return null;
-      }
-
-      final dynamic decoded = jsonDecode(response.body);
-      if (decoded is! Map<String, dynamic>) {
-        return null;
-      }
-
-      final dynamic addressRaw = decoded['address'];
-      if (addressRaw is! Map<String, dynamic>) {
-        return null;
-      }
-
-      final String houseNumber =
-          (addressRaw['house_number'] ?? '').toString().trim();
-      final String road = ((addressRaw['road'] ??
-                  addressRaw['pedestrian'] ??
-                  addressRaw['footway'] ??
-                  addressRaw['path'] ??
-                  addressRaw['residential'] ??
-                  '')
-              .toString())
-          .trim();
-      final String street =
-          [houseNumber, road].where((String part) => part.isNotEmpty).join(' ');
-
-      final String city = ((addressRaw['city'] ??
-                  addressRaw['town'] ??
-                  addressRaw['village'] ??
-                  addressRaw['hamlet'] ??
-                  addressRaw['county'] ??
-                  '')
-              .toString())
-          .trim();
-
-        final String stateCode =
-          (addressRaw['state_code'] ?? '').toString().trim().toUpperCase();
-        final String stateName = ((addressRaw['state'] ??
-              addressRaw['region'] ??
-              addressRaw['state_district'] ??
-              addressRaw['province'] ??
-              '')
-            .toString())
-          .trim()
-          .toUpperCase();
-        final String isoStateCode = ((addressRaw['ISO3166-2-lvl4'] ??
-              addressRaw['ISO3166-2-lvl5'] ??
-              addressRaw['ISO3166-2-lvl6'] ??
-              addressRaw['ISO3166-2-lvl7'] ??
-              addressRaw['ISO3166-2-lvl8'] ??
-              '')
-            .toString())
-          .trim()
-          .toUpperCase();
-      String state =
-          stateCode.contains('-') ? stateCode.split('-').last : stateCode;
-        if (state.isEmpty && isoStateCode.isNotEmpty) {
-        state = isoStateCode.contains('-')
-          ? isoStateCode.split('-').last
-          : isoStateCode;
-        }
-      if (state.isEmpty) {
-        const Map<String, String> usStateCodes = <String, String>{
-          'ALABAMA': 'AL',
-          'ALASKA': 'AK',
-          'ARIZONA': 'AZ',
-          'ARKANSAS': 'AR',
-          'CALIFORNIA': 'CA',
-          'COLORADO': 'CO',
-          'CONNECTICUT': 'CT',
-          'DELAWARE': 'DE',
-          'FLORIDA': 'FL',
-          'GEORGIA': 'GA',
-          'HAWAII': 'HI',
-          'IDAHO': 'ID',
-          'ILLINOIS': 'IL',
-          'INDIANA': 'IN',
-          'IOWA': 'IA',
-          'KANSAS': 'KS',
-          'KENTUCKY': 'KY',
-          'LOUISIANA': 'LA',
-          'MAINE': 'ME',
-          'MARYLAND': 'MD',
-          'MASSACHUSETTS': 'MA',
-          'MICHIGAN': 'MI',
-          'MINNESOTA': 'MN',
-          'MISSISSIPPI': 'MS',
-          'MISSOURI': 'MO',
-          'MONTANA': 'MT',
-          'NEBRASKA': 'NE',
-          'NEVADA': 'NV',
-          'NEW HAMPSHIRE': 'NH',
-          'NEW JERSEY': 'NJ',
-          'NEW MEXICO': 'NM',
-          'NEW YORK': 'NY',
-          'NORTH CAROLINA': 'NC',
-          'NORTH DAKOTA': 'ND',
-          'OHIO': 'OH',
-          'OKLAHOMA': 'OK',
-          'OREGON': 'OR',
-          'PENNSYLVANIA': 'PA',
-          'RHODE ISLAND': 'RI',
-          'SOUTH CAROLINA': 'SC',
-          'SOUTH DAKOTA': 'SD',
-          'TENNESSEE': 'TN',
-          'TEXAS': 'TX',
-          'UTAH': 'UT',
-          'VERMONT': 'VT',
-          'VIRGINIA': 'VA',
-          'WASHINGTON': 'WA',
-          'WEST VIRGINIA': 'WV',
-          'WISCONSIN': 'WI',
-          'WYOMING': 'WY',
-          'DISTRICT OF COLUMBIA': 'DC',
-        };
-          state = usStateCodes[stateName] ??
-            (stateName.length == 2
-              ? stateName
-              : (stateName.isNotEmpty ? stateName : ''));
-      }
-      final String zip = (addressRaw['postcode'] ?? '').toString().trim();
-
-      if (street.isEmpty && city.isEmpty && state.isEmpty && zip.isEmpty) {
-        return null;
-      }
-
-      return _AddLocationInput(
-        name: '',
-        street: street,
-        city: city,
-        state: state,
-        zip: zip,
-        requiredMinutes:
-            _logMinuteOptions.contains(20) ? 20 : _logMinuteOptions.first,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
 
   Future<void> _onAddFromCurrentLocation() async {
     if (_sites.length >= _maxSavedLocations || _isFetchingCurrentLocation) {
@@ -2496,14 +2008,19 @@ class _ScenarioPageState extends State<ScenarioPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Looking up address from GPS...')),
     );
-    final _AddLocationInput? reversePrefill = await _reverseLookupAddress(fix);
+    final AddLocationInput? reversePrefill =
+      await LocationGeocodingService.reverseLookupAddress(
+      fix,
+      defaultRequiredMinutes:
+        _logMinuteOptions.contains(20) ? 20 : _logMinuteOptions.first,
+    );
     if (!mounted) {
       return;
     }
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
-    _AddLocationInput? prefill = reversePrefill ??
-        _AddLocationInput(
+    AddLocationInput? prefill = reversePrefill ??
+      AddLocationInput(
           name: '',
           street: '',
           city: '',
@@ -2517,12 +2034,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
         : 'Confirm the address and enter a name.';
 
     while (true) {
-      final _AddLocationInput? result =
-          await showModalBottomSheet<_AddLocationInput>(
+      final AddLocationInput? result =
+          await showModalBottomSheet<AddLocationInput>(
         context: context,
         isScrollControlled: true,
         builder: (BuildContext sheetContext) {
-          return _AddLocationSheet(
+          return AddLocationSheet(
             title: 'Add From Current Location',
             submitLabel: 'Add',
             logMinuteOptions: _logMinuteOptions,
@@ -2554,7 +2071,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Verifying address coordinates...')),
       );
-      final _GeocodePoint? point = await _lookupCoordinates(result);
+      final GeocodePoint? point = await LocationGeocodingService.lookupCoordinates(
+        result,
+      );
       if (!mounted) {
         return;
       }
@@ -2593,7 +2112,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       );
 
       setState(() {
-        _sites.add(newSite);
+        _state.addSite(newSite);
         _isFetchingCurrentLocation = false;
       });
       unawaited(_saveSites());
@@ -2610,7 +2129,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onEditLocation(int index, JobSite site) async {
-    _AddLocationInput? prefill = _AddLocationInput(
+    AddLocationInput? prefill = AddLocationInput(
       name: site.name,
       street: site.street,
       city: site.city,
@@ -2621,12 +2140,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
     String? sheetError;
 
     while (true) {
-      final _AddLocationInput? result =
-          await showModalBottomSheet<_AddLocationInput>(
+      final AddLocationInput? result =
+          await showModalBottomSheet<AddLocationInput>(
         context: context,
         isScrollControlled: true,
         builder: (BuildContext sheetContext) {
-          return _AddLocationSheet(
+          return AddLocationSheet(
             title: 'Edit Location',
             submitLabel: 'Save',
             logMinuteOptions: _logMinuteOptions,
@@ -2657,7 +2176,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
             content: Text('Looking up updated latitude/longitude...')),
       );
 
-      final _GeocodePoint? point = await _lookupCoordinates(result);
+      final GeocodePoint? point = await LocationGeocodingService.lookupCoordinates(
+        result,
+      );
       if (!mounted) {
         return;
       }
@@ -2681,7 +2202,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       );
 
       setState(() {
-        _sites[index] = updatedSite;
+        _state.updateSite(index, updatedSite);
       });
       unawaited(_saveSites());
       _onSitesChanged();
@@ -2697,65 +2218,23 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onDeleteLocation(int index, JobSite site) async {
-    final bool? confirmDelete = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Delete Location'),
-          content: Text('Delete ${site.name}? This cannot be undone.'),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Delete'),
-            ),
-          ],
-        );
-      },
+    final bool confirmDelete = await ScenarioDialogService.confirmDeleteLocation(
+      context,
+      siteName: site.name,
     );
 
-    if (confirmDelete != true || !mounted) {
+    if (!confirmDelete || !mounted) {
       return;
     }
 
     setState(() {
-      _sites.removeAt(index);
+      _state.removeSiteAt(index);
     });
     unawaited(_saveSites());
     _onSitesChanged();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Deleted location: ${site.name}.')),
     );
-  }
-
-  Future<bool> _confirmAddLocationAction({required bool useCurrentLocation}) async {
-    final bool? shouldContinue = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Add Location?'),
-          content: Text(
-            useCurrentLocation
-                ? 'Are you sure you want to add a location from current GPS?'
-                : 'Are you sure you want to add a new location?',
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Continue'),
-            ),
-          ],
-        );
-      },
-    );
-    return shouldContinue == true;
   }
 
   Future<void> _onResetAllSites() async {
@@ -2769,29 +2248,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
       return;
     }
 
-    final bool? shouldReset = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Reset All Sites?'),
-          content: const Text(
-            'This will remove all saved locations. Are you sure?',
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Reset All'),
-            ),
-          ],
-        );
-      },
-    );
+    final bool shouldReset =
+        await ScenarioDialogService.confirmResetAllSites(context);
 
-    if (shouldReset != true || !mounted) {
+    if (!shouldReset || !mounted) {
       return;
     }
 
@@ -2800,14 +2260,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
 
     setState(() {
-      _sites.clear();
+      _state.clearSites();
       _latestNearest = null;
       _candidateSite = null;
       _pendingSite = null;
       _promptCountdown = 0;
-      _dwellMinutes.clear();
-      _sessionLoggedAddresses.clear();
-      _outOfGeofenceSince.clear();
+      _state.clearTrackingRuntimeState();
       _status = 'All locations were reset. Add locations from the Locations tab.';
     });
 
@@ -2818,27 +2276,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onDeleteLogEntry(int index, JobLog log) async {
-    final bool? confirmDelete = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Delete Log Entry'),
-          content: Text('Delete log for ${log.address}?'),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Delete'),
-            ),
-          ],
-        );
-      },
+    final bool confirmDelete = await ScenarioDialogService.confirmDeleteLogEntry(
+      context,
+      address: log.address,
     );
 
-    if (confirmDelete != true || !mounted) {
+    if (!confirmDelete || !mounted) {
       return;
     }
 
@@ -2846,11 +2289,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
       address: log.address,
       timestampMillis: log.timestamp.millisecondsSinceEpoch,
     );
-    _deletedLogKeys.add(deletedKey);
+    _state.addDeletedLogKey(deletedKey);
     unawaited(_saveDeletedLogKeys());
 
     setState(() {
-      _logs.removeAt(index);
+      _state.removeLogAt(index);
       _status = 'Deleted one log entry.';
     });
 
@@ -2870,39 +2313,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onEditLogEntry(int index, JobLog log) async {
-    String draftNotes = log.notes;
-
-    final String? updatedNotes = await showDialog<String>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Edit Log Notes'),
-          content: TextFormField(
-            initialValue: draftNotes,
-            onChanged: (String value) {
-              draftNotes = value;
-            },
-            minLines: 3,
-            maxLines: 6,
-            decoration: const InputDecoration(
-              labelText: 'Notes',
-              hintText: 'Add any details for this log entry...',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext).pop(draftNotes.trim()),
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
+    final String? updatedNotes = await ScenarioDialogService.editLogNotes(
+      context,
+      initialNotes: log.notes,
     );
 
     if (updatedNotes == null || !mounted) {
@@ -2910,7 +2323,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     }
 
     setState(() {
-      _logs[index] = log.copyWith(notes: updatedNotes);
+      _state.updateLogNotes(index, updatedNotes);
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -2919,171 +2332,33 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Widget _buildLogScreen() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_status),
-          ),
-        ),
-        if (_currentFix != null)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                'Current GPS: ${_currentFix!.lat.toStringAsFixed(5)}, '
-                '${_currentFix!.lng.toStringAsFixed(5)}\n'
-                'Accuracy: ${_fmtAccuracy(_currentFix!.accuracyMeters)} | '
-                'Speed: ${_fmtSpeed(_currentFix!.speedMetersPerSecond)}',
-              ),
-            ),
-          ),
-        if (_latestNearest != null)
-          Builder(
-            builder: (BuildContext context) {
-              final SiteDistance nearest = _latestNearest!;
-              final bool hideNearest = _shouldHideNearestInfo(nearest);
-              final String message = hideNearest
-                  ? 'Nearest location is currently far (${_fmtDist(nearest.distanceMeters)}). Move closer to start countdown.'
-                  : 'Countdown to log ${nearest.site.name}: '
-                      '${_minutesRemainingToLog(nearest.site).toStringAsFixed(1)} minutes remaining';
-
-              return Card(
-                color: Theme.of(context).colorScheme.secondaryContainer,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(
-                    message,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Theme.of(context).colorScheme.onSecondaryContainer,
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        if (_pendingSite != null)
-          Card(
-            color: Theme.of(context).colorScheme.tertiaryContainer,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    'Ready to log ${_pendingSite!.name}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Auto-log in ${_promptCountdown}s',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: <Widget>[
-                      TextButton(
-                        onPressed: _dismissPendingPrompt,
-                        child: const Text('Dismiss'),
-                      ),
-                      const Spacer(),
-                      FilledButton.icon(
-                        onPressed: () {
-                          final JobSite? site = _pendingSite;
-                          if (site == null) {
-                            return;
-                          }
-                          _logJob(
-                            site,
-                            confirmedByUser: true,
-                            autoLogged: false,
-                          );
-                        },
-                        icon: const Icon(Icons.check_circle_outline),
-                        label: const Text('Log Now'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        const SizedBox(height: 16),
-        Row(
-          children: <Widget>[
-            const Expanded(
-              child: Text(
-                'Locations Log',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
-            TextButton.icon(
-              onPressed: _shareAllLogs,
-              icon: const Icon(Icons.share),
-              label: const Text('Share All'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        if (_logs.isEmpty)
-          const Text('No locations logged yet.')
-        else
-          ..._logs.asMap().entries.map((MapEntry<int, JobLog> entry) {
-            final int index = entry.key;
-            final JobLog log = entry.value;
-            final String clientName =
-                log.name.trim().isEmpty ? 'Client' : log.name.trim();
-            final String address = log.address.trim();
-            final String notes = log.notes.trim();
-            final bool showAddressLine =
-                address.isNotEmpty && address != clientName;
-            return Card(
-              color: Theme.of(context).brightness == Brightness.dark
-                  ? Theme.of(context).colorScheme.surfaceContainerHigh
-                  : null,
-              child: ListTile(
-                title: Text('Customer: $clientName'),
-                subtitle: Text(
-                  '${showAddressLine ? '$address\n' : ''}'
-                  '${_formatLogTimestamp(log.timestamp)}\n'
-                  'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
-                  '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}'
-                  '${notes.isEmpty ? '' : '\nNotes: $notes'}',
-                ),
-                isThreeLine: showAddressLine,
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    IconButton(
-                      tooltip: 'Share log',
-                      onPressed: () => _shareLogEntry(log),
-                      icon: const Icon(Icons.share),
-                    ),
-                    IconButton(
-                      tooltip: 'Edit log notes',
-                      onPressed: () => _onEditLogEntry(index, log),
-                      icon: const Icon(Icons.edit_note),
-                    ),
-                    IconButton(
-                      tooltip: 'Delete log',
-                      onPressed: () => _onDeleteLogEntry(index, log),
-                      icon: const Icon(Icons.delete),
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
-      ],
+    return LogScreenView(
+      statusText: _status,
+      currentFix: _currentFix,
+      latestNearest: _latestNearest,
+      pendingSite: _pendingSite,
+      promptCountdown: _promptCountdown,
+      logs: _logs,
+      formatLogTimestamp: _formatLogTimestamp,
+      buildNearestMessage: (SiteDistance nearest) {
+        if (_shouldHideNearestInfo(nearest)) {
+          return 'Nearest location is currently far (${_fmtDist(nearest.distanceMeters)}). Move closer to start countdown.';
+        }
+        return 'Countdown to log ${nearest.site.name}: '
+            '${_minutesRemainingToLog(nearest.site).toStringAsFixed(1)} minutes remaining';
+      },
+      onDismissPendingPrompt: _dismissPendingPrompt,
+      onLogNow: (JobSite site) {
+        _logJob(
+          site,
+          confirmedByUser: true,
+          autoLogged: false,
+        );
+      },
+      onShareAllLogs: _shareAllLogs,
+      onShareLogEntry: _shareLogEntry,
+      onEditLogEntry: _onEditLogEntry,
+      onDeleteLogEntry: _onDeleteLogEntry,
     );
   }
 
@@ -3407,252 +2682,32 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Widget _buildLocationsScreen() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            const Expanded(
-              child: Text(
-                'Locations',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
-            TextButton.icon(
-              onPressed: _onResetAllSites,
-              icon: const Icon(Icons.restart_alt),
-              label: const Text('Reset All'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        if (_sites.isEmpty)
-          const Text('No locations added yet.')
-        else
-          ..._sites.asMap().entries.map((MapEntry<int, JobSite> entry) {
-            final JobSite site = entry.value;
-            return Card(
-              child: ListTile(
-                leading: CircleAvatar(child: Text('${entry.key + 1}')),
-                title: Text(site.name),
-                subtitle: Text(
-                  '${site.address}\n'
-                  'Lat: ${site.lat.toStringAsFixed(5)}, Lng: ${site.lng.toStringAsFixed(5)}\n'
-                  'Log after: ${site.requiredDwellMinutes} minutes',
-                ),
-                isThreeLine: true,
-                trailing: PopupMenuButton<String>(
-                  onSelected: (String action) {
-                    if (action == 'edit') {
-                      _onEditLocation(entry.key, site);
-                    } else if (action == 'delete') {
-                      _onDeleteLocation(entry.key, site);
-                    }
-                  },
-                  itemBuilder: (BuildContext context) =>
-                      const <PopupMenuEntry<String>>[
-                    PopupMenuItem<String>(
-                      value: 'edit',
-                      child: Text('Edit'),
-                    ),
-                    PopupMenuItem<String>(
-                      value: 'delete',
-                      child: Text('Delete'),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
-      ],
+    return LocationsScreenView(
+      sites: _sites,
+      onResetAllSites: _onResetAllSites,
+      onEditLocation: _onEditLocation,
+      onDeleteLocation: _onDeleteLocation,
     );
   }
 
   Widget _buildDebugScreen() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
-        Card(
-          child: ListTile(
-            title: const Text('App Version'),
-            subtitle: Text(_appVersionLabel),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: SwitchListTile(
-            title: const Text('Show Battery Info'),
-            subtitle: const Text('Show or hide battery diagnostics below.'),
-            value: _showBatteryInfo,
-            onChanged: _setShowBatteryInfo,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(
-              _pollingDebugSummary(),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_rawGpsDebugSummary()),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_trackingRuntimeStateDebugSummary()),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(_locationTrackingStatesDebugSummary()),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'Retrigger Logging',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Reset dwell timing for the nearest site so it can log again after required in-geofence time.',
-                ),
-                const SizedBox(height: 10),
-                FilledButton.icon(
-                  onPressed: _debugRetriggerCurrentSite,
-                  icon: const Icon(Icons.restart_alt),
-                  label: const Text('Retrigger Now'),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_showBatteryInfo) ...<Widget>[
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'Debug Tools',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: <Widget>[
-                    FilledButton.icon(
-                      onPressed:
-                          _isLoadingBatteryUsage ? null : _loadBatteryUsage,
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Refresh Battery Usage'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: _openUsageAccessSettings,
-                      icon: const Icon(Icons.admin_panel_settings_outlined),
-                      label: const Text('Usage Access Settings'),
-                    ),
-                  ],
-                ),
-                if (_isLoadingBatteryUsage) ...<Widget>[
-                  const SizedBox(height: 10),
-                  const LinearProgressIndicator(),
-                ],
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  _usageAccessGranted
-                      ? 'Usage Access: Granted'
-                      : 'Usage Access: Not Granted',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: _usageAccessGranted ? Colors.green : Colors.orange,
-                  ),
-                ),
-                if (_deviceBatteryLevel != null) ...<Widget>[
-                  const SizedBox(height: 6),
-                  Text('Current device battery: ${_deviceBatteryLevel!}%'),
-                ],
-                if (_batteryUsageFetchedAt != null) ...<Widget>[
-                  const SizedBox(height: 6),
-                  Text('Last updated: ${_batteryUsageFetchedAt!.toLocal()}'),
-                ],
-                if (_batteryUsageError != null) ...<Widget>[
-                  const SizedBox(height: 8),
-                  Text(
-                    _batteryUsageError!,
-                    style: const TextStyle(color: Colors.redAccent),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'Battery Usage by App (Estimated)',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        if (_batteryUsage.isEmpty && !_isLoadingBatteryUsage)
-          const Text('No data yet. Grant Usage Access and tap Refresh.')
-        else
-          ..._batteryUsage.map((DebugBatteryAppUsage app) {
-            final double normalized =
-                (app.estimatedBatterySharePercent / 100).clamp(0, 1);
-            return Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      app.appName,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(app.packageName),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Foreground: ${app.foregroundMinutes.toStringAsFixed(1)} min | '
-                      'Estimated share: ${app.estimatedBatterySharePercent.toStringAsFixed(1)}%',
-                    ),
-                    const SizedBox(height: 8),
-                    LinearProgressIndicator(value: normalized),
-                  ],
-                ),
-              ),
-            );
-          }),
-        ],
-      ],
+    return DebugScreenView(
+      appVersionLabel: _appVersionLabel,
+      showBatteryInfo: _showBatteryInfo,
+      onShowBatteryInfoChanged: _setShowBatteryInfo,
+      pollingDebugSummary: _pollingDebugSummary(),
+      rawGpsDebugSummary: _rawGpsDebugSummary(),
+      trackingRuntimeStateDebugSummary: _trackingRuntimeStateDebugSummary(),
+      locationTrackingStatesDebugSummary: _locationTrackingStatesDebugSummary(),
+      onRetriggerCurrentSite: _debugRetriggerCurrentSite,
+      isLoadingBatteryUsage: _isLoadingBatteryUsage,
+      onRefreshBatteryUsage: _loadBatteryUsage,
+      onOpenUsageAccessSettings: _openUsageAccessSettings,
+      usageAccessGranted: _usageAccessGranted,
+      deviceBatteryLevel: _deviceBatteryLevel,
+      batteryUsageFetchedAt: _batteryUsageFetchedAt,
+      batteryUsageError: _batteryUsageError,
+      batteryUsage: _batteryUsage,
     );
   }
 
@@ -3722,7 +2777,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       ? null
                       : () async {
                           final bool shouldContinue =
-                              await _confirmAddLocationAction(
+                              await ScenarioDialogService.confirmAddLocationAction(
+                            context,
                             useCurrentLocation: true,
                           );
                           if (!shouldContinue) {
@@ -3745,7 +2801,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
                       ? null
                       : () async {
                           final bool shouldContinue =
-                              await _confirmAddLocationAction(
+                              await ScenarioDialogService.confirmAddLocationAction(
+                            context,
                             useCurrentLocation: false,
                           );
                           if (!shouldContinue) {
@@ -3805,308 +2862,3 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 }
 
-class _AddLocationInput {
-  _AddLocationInput({
-    required this.name,
-    required this.street,
-    required this.city,
-    required this.state,
-    required this.zip,
-    required this.requiredMinutes,
-  });
-
-  final String name;
-  final String street;
-  final String city;
-  final String state;
-  final String zip;
-  final int requiredMinutes;
-}
-
-class _GeocodePoint {
-  _GeocodePoint({required this.lat, required this.lng});
-
-  final double lat;
-  final double lng;
-}
-
-class _AddLocationSheet extends StatefulWidget {
-  const _AddLocationSheet({
-    required this.title,
-    required this.submitLabel,
-    required this.logMinuteOptions,
-    this.initialInput,
-    this.errorMessage,
-  });
-
-  final String title;
-  final String submitLabel;
-  final List<int> logMinuteOptions;
-  final _AddLocationInput? initialInput;
-  final String? errorMessage;
-
-  @override
-  State<_AddLocationSheet> createState() => _AddLocationSheetState();
-}
-
-class _AddLocationSheetState extends State<_AddLocationSheet> {
-  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _streetController = TextEditingController();
-  final TextEditingController _cityController = TextEditingController();
-  final TextEditingController _stateController = TextEditingController();
-  final TextEditingController _zipController = TextEditingController();
-
-  int _selectedMinutes = 20;
-  String? _submitError;
-
-  @override
-  void initState() {
-    super.initState();
-    final _AddLocationInput? initial = widget.initialInput;
-    if (initial != null) {
-      _nameController.text = initial.name;
-      _streetController.text = initial.street;
-      _cityController.text = initial.city;
-      _stateController.text = initial.state;
-      _zipController.text = initial.zip;
-      _selectedMinutes = initial.requiredMinutes;
-    }
-
-    if (!widget.logMinuteOptions.contains(_selectedMinutes) &&
-        widget.logMinuteOptions.isNotEmpty) {
-      _selectedMinutes = widget.logMinuteOptions.first;
-    }
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _streetController.dispose();
-    _cityController.dispose();
-    _stateController.dispose();
-    _zipController.dispose();
-    super.dispose();
-  }
-
-  String _capitalizeWord(String value) {
-    if (value.isEmpty) {
-      return value;
-    }
-    final String lower = value.toLowerCase();
-    return '${lower[0].toUpperCase()}${lower.substring(1)}';
-  }
-
-  String _toTitleCase(String input) {
-    return input
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((String segment) => segment.isNotEmpty)
-        .map((String token) {
-      return token.split('-').map((String part) {
-        return part.split("'").map(_capitalizeWord).join("'");
-      }).join('-');
-    }).join(' ');
-  }
-
-  bool _hasMissingRequiredValues(_AddLocationInput input) {
-    return input.name.trim().isEmpty ||
-        input.street.trim().isEmpty ||
-        input.city.trim().isEmpty ||
-        input.state.trim().isEmpty ||
-        input.zip.trim().isEmpty;
-  }
-
-  void _submit() {
-    final _AddLocationInput input = _AddLocationInput(
-      name: _toTitleCase(_nameController.text),
-      street: _toTitleCase(_streetController.text),
-      city: _toTitleCase(_cityController.text),
-      state: _stateController.text.trim().toUpperCase(),
-      zip: _zipController.text.trim(),
-      requiredMinutes: _selectedMinutes,
-    );
-
-    if (_hasMissingRequiredValues(input)) {
-      setState(() {
-        _submitError = 'Please fill name, street, city, state, and ZIP.';
-      });
-      return;
-    }
-
-    Navigator.of(context).pop(input);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final double keyboardInset = MediaQuery.of(context).viewInsets.bottom;
-    return SafeArea(
-      child: AnimatedPadding(
-        duration: const Duration(milliseconds: 200),
-        padding: EdgeInsets.only(bottom: keyboardInset),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-          child: SingleChildScrollView(
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    widget.title,
-                    style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                  if (_submitError != null ||
-                      widget.errorMessage != null) ...<Widget>[
-                    const SizedBox(height: 10),
-                    Text(
-                      _submitError ?? widget.errorMessage!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _nameController,
-                    onChanged: (_) {
-                      if (_submitError != null) {
-                        setState(() {
-                          _submitError = null;
-                        });
-                      }
-                    },
-                    textInputAction: TextInputAction.next,
-                    decoration: const InputDecoration(
-                      labelText: 'Client Name',
-                      hintText: 'Smith Residence',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _streetController,
-                    onChanged: (_) {
-                      if (_submitError != null) {
-                        setState(() {
-                          _submitError = null;
-                        });
-                      }
-                    },
-                    textInputAction: TextInputAction.next,
-                    maxLines: 2,
-                    decoration: const InputDecoration(
-                      labelText: 'Street',
-                      hintText: '123 Main St',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        flex: 2,
-                        child: TextFormField(
-                          controller: _cityController,
-                          onChanged: (_) {
-                            if (_submitError != null) {
-                              setState(() {
-                                _submitError = null;
-                              });
-                            }
-                          },
-                          textInputAction: TextInputAction.next,
-                          decoration: const InputDecoration(
-                            labelText: 'City',
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextFormField(
-                          controller: _stateController,
-                          onChanged: (_) {
-                            if (_submitError != null) {
-                              setState(() {
-                                _submitError = null;
-                              });
-                            }
-                          },
-                          textInputAction: TextInputAction.next,
-                          maxLength: 2,
-                          decoration: const InputDecoration(
-                            labelText: 'State',
-                            counterText: '',
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _zipController,
-                    onChanged: (_) {
-                      if (_submitError != null) {
-                        setState(() {
-                          _submitError = null;
-                        });
-                      }
-                    },
-                    textInputAction: TextInputAction.done,
-                    decoration: const InputDecoration(
-                      labelText: 'ZIP',
-                      hintText: '75201',
-                      border: OutlineInputBorder(),
-                    ),
-                    onFieldSubmitted: (_) => _submit(),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<int>(
-                    initialValue: _selectedMinutes,
-                    decoration: const InputDecoration(
-                      labelText: 'How long to log (minutes)',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: widget.logMinuteOptions.map((int minutes) {
-                      return DropdownMenuItem<int>(
-                        value: minutes,
-                        child: Text('$minutes minutes'),
-                      );
-                    }).toList(),
-                    onChanged: (int? value) {
-                      if (value == null) {
-                        return;
-                      }
-                      setState(() {
-                        _selectedMinutes = value;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: <Widget>[
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('Cancel'),
-                      ),
-                      const Spacer(),
-                      FilledButton(
-                        onPressed: _submit,
-                        child: Text(widget.submitLabel),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
