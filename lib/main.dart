@@ -634,6 +634,26 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   String _formatMetersOption(int meters) => _fmtDistInt(meters);
 
+  bool _shouldUseFarPollingForNearestLoggedSite(SiteDistance nearest) {
+    final LocationFix? fix = _currentFix;
+    if (fix == null) {
+      return false;
+    }
+
+    final bool nearestLogged =
+        _sessionLoggedAddresses.contains(nearest.site.address);
+    if (!nearestLogged) {
+      return false;
+    }
+
+    final double effectiveRadius = max(
+      _matchRadiusMeters,
+      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+    );
+    final bool nearestInGeofence = nearest.distanceMeters <= effectiveRadius;
+    return nearestInGeofence;
+  }
+
   int _activePollSeconds() {
     if (_currentFix == null || _sites.isEmpty) {
       return _closePollSeconds;
@@ -642,7 +662,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _currentFix!,
       _sites,
     );
-    if (nearest.distanceMeters > _farDistanceMeters) {
+    if (nearest.distanceMeters > _farDistanceMeters ||
+        _shouldUseFarPollingForNearestLoggedSite(nearest)) {
       return _farPollSeconds;
     }
     return _closePollSeconds;
@@ -656,7 +677,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
       _currentFix!,
       _sites,
     );
-    return nearest.distanceMeters > _farDistanceMeters ? 'far' : 'close';
+    if (nearest.distanceMeters > _farDistanceMeters) {
+      return 'far';
+    }
+    if (_shouldUseFarPollingForNearestLoggedSite(nearest)) {
+      return 'far (logged in geofence)';
+    }
+    return 'close';
   }
 
   String _pollingDebugSummary() {
