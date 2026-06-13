@@ -59,6 +59,44 @@ class LogCommunicationService {
     );
   }
 
+  static Future<void> addLogToCalendar({
+    required BuildContext context,
+    required MethodChannel channel,
+    required JobLog log,
+  }) async {
+    final String clientName = log.name.trim().isEmpty ? 'Client' : log.name;
+    final int startMillis = log.timestamp.millisecondsSinceEpoch;
+    final int endMillis =
+        log.timestamp.add(const Duration(minutes: 30)).millisecondsSinceEpoch;
+    final String notesLine =
+        log.notes.trim().isEmpty ? '' : '\nNotes: ${log.notes.trim()}';
+
+    try {
+      await channel.invokeMethod<void>(
+        'addLogToCalendar',
+        <String, dynamic>{
+          'title': 'LokaLog Visit: $clientName',
+          'description':
+              'Customer: $clientName\nAddress: ${log.address}\nConfidence: ${log.confidence.toStringAsFixed(1)}%$notesLine',
+          'location': log.address,
+          'startMillis': startMillis,
+          'endMillis': endMillis,
+        },
+      );
+    } on MissingPluginException {
+      _showSnack(
+          context, 'Calendar add is currently supported on Android only.');
+    } on PlatformException catch (error) {
+      if (error.code == 'CALENDAR_UNAVAILABLE') {
+        _showSnack(context, 'No calendar app found on this device.');
+      } else {
+        _showSnack(context, 'Could not open calendar app.');
+      }
+    } catch (_) {
+      _showSnack(context, 'Could not open calendar app.');
+    }
+  }
+
   static Future<void> shareText({
     required BuildContext context,
     required MethodChannel channel,

@@ -17,6 +17,7 @@ class LogScreenView extends StatelessWidget {
     required this.onLogNow,
     required this.onShareAllLogs,
     required this.onShareLogEntry,
+    required this.onAddLogToCalendar,
     required this.onEditLogEntry,
     required this.onDeleteLogEntry,
   });
@@ -33,6 +34,7 @@ class LogScreenView extends StatelessWidget {
   final ValueChanged<JobSite> onLogNow;
   final VoidCallback onShareAllLogs;
   final ValueChanged<JobLog> onShareLogEntry;
+  final ValueChanged<JobLog> onAddLogToCalendar;
   final void Function(int index, JobLog log) onEditLogEntry;
   final void Function(int index, JobLog log) onDeleteLogEntry;
 
@@ -177,6 +179,11 @@ class LogScreenView extends StatelessWidget {
                       tooltip: 'Share log',
                       onPressed: () => onShareLogEntry(log),
                       icon: const Icon(Icons.share),
+                    ),
+                    IconButton(
+                      tooltip: 'Add to calendar',
+                      onPressed: () => onAddLogToCalendar(log),
+                      icon: const Icon(Icons.event_available),
                     ),
                     IconButton(
                       tooltip: 'Edit log notes',

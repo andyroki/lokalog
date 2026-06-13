@@ -6,12 +6,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.usage.UsageStats
 import android.app.usage.UsageStatsManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Looper
+import android.provider.CalendarContract
 import android.provider.Settings
 import android.location.LocationManager
 import android.util.Log
@@ -149,6 +151,26 @@ class MainActivity : FlutterActivity() {
 						result.success(true)
 					}
 
+					"addLogToCalendar" -> {
+						val title = call.argument<String>("title")
+						val description = call.argument<String>("description")
+						val location = call.argument<String>("location")
+						val startMillis = call.argument<Number>("startMillis")?.toLong()
+						val endMillis = call.argument<Number>("endMillis")?.toLong()
+						if (title.isNullOrBlank() || startMillis == null || endMillis == null) {
+							result.error("INVALID_ARGUMENT", "Missing title/startMillis/endMillis", null)
+							return@setMethodCallHandler
+						}
+						addLogToCalendar(
+							title = title,
+							description = description,
+							location = location,
+							startMillis = startMillis,
+							endMillis = endMillis,
+							result = result
+						)
+					}
+
 					"showLogReminderNotification" -> {
 						val address = call.argument<String>("address")
 						val name = call.argument<String>("name")
@@ -186,6 +208,59 @@ class MainActivity : FlutterActivity() {
 		val chooser = Intent.createChooser(intent, "Share log")
 		chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 		startActivity(chooser)
+	}
+
+	private fun addLogToCalendar(
+		title: String,
+		description: String?,
+		location: String?,
+		startMillis: Long,
+		endMillis: Long,
+		result: MethodChannel.Result
+	) {
+		val withDataUri = Intent(Intent.ACTION_INSERT).apply {
+			data = CalendarContract.Events.CONTENT_URI
+			putExtra(CalendarContract.Events.TITLE, title)
+			if (!description.isNullOrBlank()) {
+				putExtra(CalendarContract.Events.DESCRIPTION, description)
+			}
+			if (!location.isNullOrBlank()) {
+				putExtra(CalendarContract.Events.EVENT_LOCATION, location)
+			}
+			putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, startMillis)
+			putExtra(CalendarContract.EXTRA_EVENT_END_TIME, endMillis)
+			addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+		}
+
+		val withEventType = Intent(Intent.ACTION_INSERT).apply {
+			type = "vnd.android.cursor.item/event"
+			putExtra(CalendarContract.Events.TITLE, title)
+			if (!description.isNullOrBlank()) {
+				putExtra(CalendarContract.Events.DESCRIPTION, description)
+			}
+			if (!location.isNullOrBlank()) {
+				putExtra(CalendarContract.Events.EVENT_LOCATION, location)
+			}
+			putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, startMillis)
+			putExtra(CalendarContract.EXTRA_EVENT_END_TIME, endMillis)
+			addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+		}
+
+		try {
+			startActivity(withDataUri)
+			result.success(true)
+		} catch (_: ActivityNotFoundException) {
+			try {
+				startActivity(withEventType)
+				result.success(true)
+			} catch (_: ActivityNotFoundException) {
+				result.error("CALENDAR_UNAVAILABLE", "No calendar app available", null)
+			} catch (error: Exception) {
+				result.error("CALENDAR_FAILED", error.message, null)
+			}
+		} catch (error: Exception) {
+			result.error("CALENDAR_FAILED", error.message, null)
+		}
 	}
 
 	private fun showLogReminderNotification(address: String, name: String?, countdownSeconds: Int) {

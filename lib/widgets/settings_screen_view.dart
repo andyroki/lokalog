@@ -38,6 +38,7 @@ class SettingsScreenView extends StatefulWidget {
     required this.formatMetersOption,
     required this.onOpenLocationSettings,
     required this.onOpenAppSettings,
+    required this.backgroundLocationPermissionGranted,
     required this.locationLimitUnlocked,
     required this.onLocationUnlockCodeSubmitted,
   });
@@ -77,6 +78,7 @@ class SettingsScreenView extends StatefulWidget {
   final String Function(int) formatMetersOption;
   final VoidCallback onOpenLocationSettings;
   final VoidCallback onOpenAppSettings;
+  final bool backgroundLocationPermissionGranted;
   final bool locationLimitUnlocked;
   final ValueChanged<String> onLocationUnlockCodeSubmitted;
 
@@ -199,6 +201,18 @@ class _SettingsScreenViewState extends State<SettingsScreenView> {
                 ),
                 const SizedBox(height: 8),
                 Text('Current: ${widget.fontScale.toStringAsFixed(2)}x'),
+                const SizedBox(height: 10),
+                Text(
+                  widget.backgroundLocationPermissionGranted
+                      ? 'Background location: Granted (Allow all the time).'
+                      : 'Background location: Not granted. Set Location permission to "Allow all the time" for app-closed geofencing.',
+                  style: TextStyle(
+                    color: widget.backgroundLocationPermissionGranted
+                        ? Colors.green
+                        : Colors.orange,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,

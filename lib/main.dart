@@ -250,6 +250,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   bool _useMetric = true;
   bool _isChangingTrackingState = false;
   bool _isFetchingCurrentLocation = false;
+  bool _backgroundLocationPermissionGranted = false;
   DateTime? _lastFixAt;
   Map<Object?, Object?>? _lastRawGpsPayload;
   DateTime? _lastRawGpsPayloadAt;
@@ -291,8 +292,33 @@ class _ScenarioPageState extends State<ScenarioPage> {
     unawaited(_loadUnitPreference());
     unawaited(_loadTrackingPreference());
     unawaited(_loadLocationLimitUnlockedPreference());
+    unawaited(_refreshBackgroundLocationPermissionStatus());
     unawaited(_loadTrackingRuntimeState());
     unawaited(_loadSites());
+  }
+
+  Future<void> _refreshBackgroundLocationPermissionStatus() async {
+    if (!Platform.isAndroid) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _backgroundLocationPermissionGranted = false;
+      });
+      return;
+    }
+
+    final bool granted =
+        await LocationPermissionService.hasBackgroundLocationPermission(
+      _locationChannel,
+    );
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _backgroundLocationPermissionGranted = granted;
+    });
   }
 
   void _initializeAppVersionLabel() {
@@ -722,7 +748,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final String dist = state.distanceMeters == null
           ? 'no fix'
           : _fmtDist(state.distanceMeters!);
-        final String timeInGeofence =
+      final String timeInGeofence =
           state.timeInGeofenceMinutes.toStringAsFixed(1);
       final String remaining = state.remainingMinutes.toStringAsFixed(1);
       return '${state.name}\n'
@@ -780,7 +806,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         'Restored: $restored\n'
         'Saved: $saved\n'
         'Tracked sites this session: ${_sessionLoggedAddresses.length}\n'
-      'Active geofence timers: ${_timeInGeofenceMinutesBySite.length}';
+        'Active geofence timers: ${_timeInGeofenceMinutesBySite.length}';
   }
 
   String _appReadinessDebugSummary() {
@@ -1326,6 +1352,11 @@ class _ScenarioPageState extends State<ScenarioPage> {
         await LocationPermissionService.hasBackgroundLocationPermission(
       _locationChannel,
     );
+    if (mounted) {
+      setState(() {
+        _backgroundLocationPermissionGranted = backgroundGranted;
+      });
+    }
     if (!backgroundGranted) {
       setState(() {
         _status =
@@ -1725,7 +1756,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     required bool hideNearestDetails,
   }) {
     final double timeInGeofence =
-      _timeInGeofenceMinutesBySite[nearest.site.address] ?? 0;
+        _timeInGeofenceMinutesBySite[nearest.site.address] ?? 0;
     final double remaining = _minutesRemainingToLog(nearest.site);
     final String accuracyLabel =
         goodAccuracy ? 'good' : 'poor (nearest estimate may drift)';
@@ -1740,7 +1771,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return 'Nearest: ${nearest.site.address} | '
         'distance: ${_fmtDist(nearest.distanceMeters)} | '
         'target: ${nearest.site.requiredDwellMinutes} min | '
-      'time in geofence: ${timeInGeofence.toStringAsFixed(1)} min | '
+        'time in geofence: ${timeInGeofence.toStringAsFixed(1)} min | '
         'remaining: ${remaining.toStringAsFixed(1)} min | '
         'accuracy: $accuracyLabel | '
         'motion: ${lowSpeed ? 'stationary' : 'moving'} | '
@@ -1786,6 +1817,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
       channel: _locationChannel,
       logs: _logs,
       formatLogTimestamp: _formatLogTimestamp,
+    );
+  }
+
+  Future<void> _addLogToCalendar(JobLog log) async {
+    await LogCommunicationService.addLogToCalendar(
+      context: context,
+      channel: _locationChannel,
+      log: log,
     );
   }
 
@@ -2427,6 +2466,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       },
       onShareAllLogs: _shareAllLogs,
       onShareLogEntry: _shareLogEntry,
+      onAddLogToCalendar: _addLogToCalendar,
       onEditLogEntry: _onEditLogEntry,
       onDeleteLogEntry: _onDeleteLogEntry,
     );
@@ -2532,6 +2572,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       formatMetersOption: _formatMetersOption,
       onOpenLocationSettings: _openLocationSettings,
       onOpenAppSettings: _openAppSettings,
+      backgroundLocationPermissionGranted: _backgroundLocationPermissionGranted,
       locationLimitUnlocked: _locationLimitUnlocked,
       onLocationUnlockCodeSubmitted: _onLocationUnlockCodeSubmitted,
     );
@@ -2705,6 +2746,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
           setState(() {
             _selectedTabIndex = index;
           });
+          if (index == 2) {
+            unawaited(_refreshBackgroundLocationPermissionStatus());
+          }
           if (_debugModeEnabled &&
               index == 3 &&
               _showBatteryInfo &&
