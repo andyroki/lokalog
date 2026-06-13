@@ -74,7 +74,7 @@ class TrackingController {
     double nearestDistance = double.infinity;
     JobSite? nextCandidateSite;
     double candidateDistance = double.infinity;
-    final double increment = elapsedMinutes.clamp(0, 3);
+    final double increment = elapsedMinutes < 0 ? 0 : elapsedMinutes;
 
     for (final JobSite site in sites) {
       final double distance = LocationTrackingCalculator.distanceMetersBetween(
