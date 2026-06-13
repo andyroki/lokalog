@@ -20,7 +20,7 @@ class LocationTrackingState {
     required this.outOfGeofence,
     required this.logged,
     required this.waitingToGetLogged,
-    required this.dwellMinutes,
+    required this.timeInGeofenceMinutes,
     required this.remainingMinutes,
     this.distanceMeters,
     required this.lastUpdatedAt,
@@ -32,7 +32,7 @@ class LocationTrackingState {
   final bool outOfGeofence;
   final bool logged;
   final bool waitingToGetLogged;
-  final double dwellMinutes;
+  final double timeInGeofenceMinutes;
   final double remainingMinutes;
   final double? distanceMeters;
   final DateTime lastUpdatedAt;

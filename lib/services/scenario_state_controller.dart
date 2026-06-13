@@ -5,7 +5,7 @@ class ScenarioStateController {
   final List<JobLog> logs = <JobLog>[];
   final Set<String> deletedLogKeys = <String>{};
   final Set<String> sessionLoggedAddresses = <String>{};
-  final Map<String, double> dwellMinutes = <String, double>{};
+  final Map<String, double> timeInGeofenceMinutes = <String, double>{};
   final Map<String, DateTime> outOfGeofenceSince = <String, DateTime>{};
 
   bool isDuplicateLocationName(String name, {int? excludingIndex}) {
@@ -43,7 +43,7 @@ class ScenarioStateController {
 
   void clearTrackingRuntimeState() {
     sessionLoggedAddresses.clear();
-    dwellMinutes.clear();
+    timeInGeofenceMinutes.clear();
     outOfGeofenceSince.clear();
   }
 
@@ -82,7 +82,7 @@ class ScenarioStateController {
     sessionLoggedAddresses.removeWhere(
       (String address) => !validAddresses.contains(address),
     );
-    dwellMinutes.removeWhere(
+    timeInGeofenceMinutes.removeWhere(
       (String address, double _) => !validAddresses.contains(address),
     );
     outOfGeofenceSince.removeWhere(
@@ -96,13 +96,14 @@ class ScenarioStateController {
             .whereType<String>()
             .toList();
 
-    final Map<String, double> parsedDwellMinutes = <String, double>{};
-    final dynamic dwellRaw = decoded['dwellMinutes'];
-    if (dwellRaw is Map<String, dynamic>) {
-      dwellRaw.forEach((String key, dynamic value) {
+    final Map<String, double> parsedTimeInGeofenceMinutes = <String, double>{};
+    final dynamic timeInGeofenceRaw =
+        decoded['timeInGeofenceMinutes'] ?? decoded['dwellMinutes'];
+    if (timeInGeofenceRaw is Map<String, dynamic>) {
+      timeInGeofenceRaw.forEach((String key, dynamic value) {
         final double? parsed = (value as num?)?.toDouble();
         if (parsed != null && parsed >= 0) {
-          parsedDwellMinutes[key] = parsed;
+          parsedTimeInGeofenceMinutes[key] = parsed;
         }
       });
     }
@@ -122,9 +123,9 @@ class ScenarioStateController {
     sessionLoggedAddresses
       ..clear()
       ..addAll(loggedAddresses);
-    dwellMinutes
+    timeInGeofenceMinutes
       ..clear()
-      ..addAll(parsedDwellMinutes);
+      ..addAll(parsedTimeInGeofenceMinutes);
     outOfGeofenceSince
       ..clear()
       ..addAll(parsedOutOfGeofenceSince);
@@ -133,7 +134,9 @@ class ScenarioStateController {
   Map<String, dynamic> buildTrackingRuntimeStatePayload() {
     return <String, dynamic>{
       'sessionLoggedAddresses': sessionLoggedAddresses.toList(),
-      'dwellMinutes': <String, double>{...dwellMinutes},
+      // Keep both keys while migrating naming in persisted payloads.
+      'timeInGeofenceMinutes': <String, double>{...timeInGeofenceMinutes},
+      'dwellMinutes': <String, double>{...timeInGeofenceMinutes},
       'outOfGeofenceSince': outOfGeofenceSince.map(
         (String key, DateTime value) => MapEntry<String, int>(
           key,

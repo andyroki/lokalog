@@ -278,7 +278,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
   List<JobLog> get _logs => _state.logs;
   Set<String> get _deletedLogKeys => _state.deletedLogKeys;
   Set<String> get _sessionLoggedAddresses => _state.sessionLoggedAddresses;
-  Map<String, double> get _dwellMinutes => _state.dwellMinutes;
+  Map<String, double> get _timeInGeofenceMinutesBySite =>
+      _state.timeInGeofenceMinutes;
   Map<String, DateTime> get _outOfGeofenceSince => _state.outOfGeofenceSince;
 
   @override
@@ -676,7 +677,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       fix: _currentFix,
       farDistanceMeters: _farDistanceMeters,
       matchRadiusMeters: _matchRadiusMeters,
-      dwellMinutes: _dwellMinutes,
+      timeInGeofenceMinutes: _timeInGeofenceMinutesBySite,
       sessionLoggedAddresses: _sessionLoggedAddresses,
       pendingSite: _pendingSite,
       candidateSite: _candidateSite,
@@ -694,11 +695,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final String dist = state.distanceMeters == null
           ? 'no fix'
           : _fmtDist(state.distanceMeters!);
-      final String dwell = state.dwellMinutes.toStringAsFixed(1);
+        final String timeInGeofence =
+          state.timeInGeofenceMinutes.toStringAsFixed(1);
       final String remaining = state.remainingMinutes.toStringAsFixed(1);
       return '${state.name}\n'
           '  in geofence: ${state.inGeofence}  |  out: ${state.outOfGeofence}  |  far: ${state.far}  |  dist: $dist\n'
-          '  dwell: ${dwell}m  |  remaining: ${remaining}m\n'
+          '  time in geofence: ${timeInGeofence}m  |  remaining: ${remaining}m\n'
           '  logged: ${state.logged}  |  waiting: ${state.waitingToGetLogged}';
     }).join('\n\n');
 
@@ -751,7 +753,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         'Restored: $restored\n'
         'Saved: $saved\n'
         'Tracked sites this session: ${_sessionLoggedAddresses.length}\n'
-        'Active dwell timers: ${_dwellMinutes.length}';
+      'Active geofence timers: ${_timeInGeofenceMinutesBySite.length}';
   }
 
   String _appReadinessDebugSummary() {
@@ -1485,7 +1487,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
       lastFixAt: _lastFixAt,
       sites: _sites,
       sessionLoggedAddresses: _sessionLoggedAddresses,
-      dwellMinutes: _dwellMinutes,
+      timeInGeofenceMinutes: _timeInGeofenceMinutesBySite,
       outOfGeofenceSince: _outOfGeofenceSince,
       outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
       matchRadiusMeters: _matchRadiusMeters,
@@ -1531,7 +1533,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   double _minutesRemainingToLog(JobSite site) {
     return LocationTrackingCalculator.minutesRemainingToLog(
       site,
-      _dwellMinutes,
+      _timeInGeofenceMinutesBySite,
     );
   }
 
@@ -1660,7 +1662,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     setState(() {
       _sessionLoggedAddresses.remove(site.address);
       _outOfGeofenceSince.remove(site.address);
-      _dwellMinutes[site.address] = 0;
+      _timeInGeofenceMinutesBySite[site.address] = 0;
       _stableSamples = 0;
       _candidateSite = site;
       _status =
@@ -1695,7 +1697,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
     required double effectiveRadius,
     required bool hideNearestDetails,
   }) {
-    final double dwell = _dwellMinutes[nearest.site.address] ?? 0;
+    final double timeInGeofence =
+      _timeInGeofenceMinutesBySite[nearest.site.address] ?? 0;
     final double remaining = _minutesRemainingToLog(nearest.site);
     final String accuracyLabel =
         goodAccuracy ? 'good' : 'poor (nearest estimate may drift)';
@@ -1710,7 +1713,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     return 'Nearest: ${nearest.site.address} | '
         'distance: ${_fmtDist(nearest.distanceMeters)} | '
         'target: ${nearest.site.requiredDwellMinutes} min | '
-        'dwell: ${dwell.toStringAsFixed(1)} min | '
+      'time in geofence: ${timeInGeofence.toStringAsFixed(1)} min | '
         'remaining: ${remaining.toStringAsFixed(1)} min | '
         'accuracy: $accuracyLabel | '
         'motion: ${lowSpeed ? 'stationary' : 'moving'} | '

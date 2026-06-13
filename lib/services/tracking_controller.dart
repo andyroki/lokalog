@@ -34,7 +34,7 @@ class TrackingController {
     required DateTime? lastFixAt,
     required List<JobSite> sites,
     required Set<String> sessionLoggedAddresses,
-    required Map<String, double> dwellMinutes,
+    required Map<String, double> timeInGeofenceMinutes,
     required Map<String, DateTime> outOfGeofenceSince,
     required int outOfGeofenceRetriggerMinutes,
     required double matchRadiusMeters,
@@ -74,6 +74,7 @@ class TrackingController {
     double nearestDistance = double.infinity;
     JobSite? nextCandidateSite;
     double candidateDistance = double.infinity;
+    final double increment = elapsedMinutes.clamp(0, 3);
 
     for (final JobSite site in sites) {
       final double distance = LocationTrackingCalculator.distanceMetersBetween(
@@ -90,6 +91,17 @@ class TrackingController {
         nearestDistance = distance;
       }
 
+      // Keep dwell updated per site so debug/state reflects current geofence
+      // status for all locations, not just the nearest candidate.
+      if (inGeofence) {
+        if (!isLogged) {
+          timeInGeofenceMinutes[site.address] =
+              (timeInGeofenceMinutes[site.address] ?? 0) + increment;
+        }
+      } else {
+        timeInGeofenceMinutes[site.address] = 0;
+      }
+
       if (isLogged) {
         if (!inGeofence) {
           final DateTime outSince =
@@ -98,7 +110,7 @@ class TrackingController {
               outOfGeofenceRetriggerMinutes) {
             sessionLoggedAddresses.remove(site.address);
             outOfGeofenceSince.remove(site.address);
-            dwellMinutes[site.address] = 0;
+            timeInGeofenceMinutes[site.address] = 0;
           }
         } else {
           outOfGeofenceSince.remove(site.address);
@@ -114,10 +126,11 @@ class TrackingController {
 
     int nextStableSamples;
     if (nextCandidateSite != null) {
-      nextStableSamples = currentStableSamples + 1;
-      final double increment = elapsedMinutes.clamp(0, 3);
-      dwellMinutes[nextCandidateSite.address] =
-          (dwellMinutes[nextCandidateSite.address] ?? 0) + increment;
+      if (currentCandidateSite?.address == nextCandidateSite.address) {
+        nextStableSamples = currentStableSamples + 1;
+      } else {
+        nextStableSamples = 1;
+      }
     } else {
       nextStableSamples = 0;
     }
@@ -130,7 +143,7 @@ class TrackingController {
     final bool shouldPrompt = nextCandidateSite != null &&
         pendingSite == null &&
         !sessionLoggedAddresses.contains(nextCandidateSite.address) &&
-        (dwellMinutes[nextCandidateSite.address] ?? 0) >=
+      (timeInGeofenceMinutes[nextCandidateSite.address] ?? 0) >=
             nextCandidateSite.requiredDwellMinutes.toDouble() &&
         nextStableSamples >= requiredStableSamples;
 

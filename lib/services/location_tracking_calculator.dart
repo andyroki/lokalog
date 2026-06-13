@@ -8,7 +8,7 @@ class LocationTrackingCalculator {
     required LocationFix? fix,
     required int farDistanceMeters,
     required double matchRadiusMeters,
-    required Map<String, double> dwellMinutes,
+    required Map<String, double> timeInGeofenceMinutes,
     required Set<String> sessionLoggedAddresses,
     required JobSite? pendingSite,
     required JobSite? candidateSite,
@@ -30,15 +30,19 @@ class LocationTrackingCalculator {
       final bool outOfGeofence =
           distanceMeters != null && distanceMeters > effectiveRadius;
 
-      final double dwell = dwellMinutes[site.address] ?? 0;
-      final double remaining =
-          max(0, site.requiredDwellMinutes.toDouble() - dwell);
+      final double timeInGeofence =
+          timeInGeofenceMinutes[site.address] ?? 0;
+      final double remaining = max(
+        0,
+        site.requiredDwellMinutes.toDouble() - timeInGeofence,
+      );
 
       final bool logged = sessionLoggedAddresses.contains(site.address);
       final bool waitingToGetLogged =
           !logged &&
           (pendingSite?.address == site.address ||
-              (candidateSite?.address == site.address && dwell > 0));
+            (candidateSite?.address == site.address &&
+              timeInGeofence > 0));
 
       return LocationTrackingState(
         name: site.name,
@@ -47,7 +51,7 @@ class LocationTrackingCalculator {
         outOfGeofence: outOfGeofence,
         logged: logged,
         waitingToGetLogged: waitingToGetLogged,
-        dwellMinutes: dwell,
+        timeInGeofenceMinutes: timeInGeofence,
         remainingMinutes: remaining,
         distanceMeters: distanceMeters,
         lastUpdatedAt: now,
@@ -79,10 +83,10 @@ class LocationTrackingCalculator {
 
   static double minutesRemainingToLog(
     JobSite site,
-    Map<String, double> dwellMinutes,
+    Map<String, double> timeInGeofenceMinutes,
   ) {
-    final double dwell = dwellMinutes[site.address] ?? 0;
-    return max(0, site.requiredDwellMinutes.toDouble() - dwell);
+    final double timeInGeofence = timeInGeofenceMinutes[site.address] ?? 0;
+    return max(0, site.requiredDwellMinutes.toDouble() - timeInGeofence);
   }
 
   static double confidenceScore(LocationFix fix, JobSite site) {
