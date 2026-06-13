@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-class SettingsScreenView extends StatelessWidget {
+class SettingsScreenView extends StatefulWidget {
   const SettingsScreenView({
     super.key,
     required this.debugModeEnabled,
@@ -38,6 +38,8 @@ class SettingsScreenView extends StatelessWidget {
     required this.formatMetersOption,
     required this.onOpenLocationSettings,
     required this.onOpenAppSettings,
+    required this.locationLimitUnlocked,
+    required this.onLocationUnlockCodeSubmitted,
   });
 
   final bool debugModeEnabled;
@@ -75,6 +77,21 @@ class SettingsScreenView extends StatelessWidget {
   final String Function(int) formatMetersOption;
   final VoidCallback onOpenLocationSettings;
   final VoidCallback onOpenAppSettings;
+  final bool locationLimitUnlocked;
+  final ValueChanged<String> onLocationUnlockCodeSubmitted;
+
+  @override
+  State<SettingsScreenView> createState() => _SettingsScreenViewState();
+}
+
+class _SettingsScreenViewState extends State<SettingsScreenView> {
+  final TextEditingController _unlockCodeController = TextEditingController();
+
+  @override
+  void dispose() {
+    _unlockCodeController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -85,8 +102,8 @@ class SettingsScreenView extends StatelessWidget {
           child: SwitchListTile(
             title: const Text('Debug Mode'),
             subtitle: const Text('Show or hide the Debug tab and tools.'),
-            value: debugModeEnabled,
-            onChanged: onDebugModeChanged,
+            value: widget.debugModeEnabled,
+            onChanged: widget.onDebugModeChanged,
           ),
         ),
         const SizedBox(height: 12),
@@ -94,17 +111,79 @@ class SettingsScreenView extends StatelessWidget {
           child: SwitchListTile(
             title: const Text('Dark Theme'),
             subtitle: const Text('Toggle between light and dark mode.'),
-            value: isDarkMode,
-            onChanged: onDarkModeChanged,
+            value: widget.isDarkMode,
+            onChanged: widget.onDarkModeChanged,
           ),
         ),
         const SizedBox(height: 12),
         Card(
           child: SwitchListTile(
             title: const Text('Units'),
-            subtitle: Text(useMetric ? 'Metric (m, m/s)' : 'English (ft, mph)'),
-            value: useMetric,
-            onChanged: onUseMetricChanged,
+            subtitle: Text(
+              widget.useMetric ? 'Metric (m, m/s)' : 'English (ft, mph)',
+            ),
+            value: widget.useMetric,
+            onChanged: widget.onUseMetricChanged,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Location Limit Unlock',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.locationLimitUnlocked
+                      ? 'Unlocked: you can add more than 5 locations.'
+                      : 'Enter unlock code to allow more than 5 locations.',
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: TextField(
+                        controller: _unlockCodeController,
+                        enabled: !widget.locationLimitUnlocked,
+                        textInputAction: TextInputAction.done,
+                        decoration: const InputDecoration(
+                          labelText: 'Unlock code',
+                          border: OutlineInputBorder(),
+                        ),
+                        onSubmitted: (String value) {
+                          if (value.trim().isEmpty ||
+                              widget.locationLimitUnlocked) {
+                            return;
+                          }
+                          widget.onLocationUnlockCodeSubmitted(value);
+                          _unlockCodeController.clear();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: widget.locationLimitUnlocked
+                          ? null
+                          : () {
+                              final String value =
+                                  _unlockCodeController.text.trim();
+                              if (value.isEmpty) {
+                                return;
+                              }
+                              widget.onLocationUnlockCodeSubmitted(value);
+                              _unlockCodeController.clear();
+                            },
+                      child: const Text('Unlock'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 12),
@@ -119,26 +198,30 @@ class SettingsScreenView extends StatelessWidget {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
-                Text('Current: ${fontScale.toStringAsFixed(2)}x'),
+                Text('Current: ${widget.fontScale.toStringAsFixed(2)}x'),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   children: <Widget>[
                     OutlinedButton.icon(
-                      onPressed: fontScale <= minFontScale
+                      onPressed: widget.fontScale <= widget.minFontScale
                           ? null
                           : () {
-                              onFontScaleChanged(fontScale - fontScaleStep);
+                              widget.onFontScaleChanged(
+                                widget.fontScale - widget.fontScaleStep,
+                              );
                             },
                       icon: const Icon(Icons.remove),
                       label: const Text('Decrease'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: fontScale >= maxFontScale
+                      onPressed: widget.fontScale >= widget.maxFontScale
                           ? null
                           : () {
-                              onFontScaleChanged(fontScale + fontScaleStep);
+                              widget.onFontScaleChanged(
+                                widget.fontScale + widget.fontScaleStep,
+                              );
                             },
                       icon: const Icon(Icons.add),
                       label: const Text('Increase'),
@@ -165,19 +248,19 @@ class SettingsScreenView extends StatelessWidget {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Tracking On'),
                   subtitle: Text(
-                    isTracking
+                    widget.isTracking
                         ? 'Tracking is active.'
-                        : (trackingEnabledPreference
-                            ? 'Tracking did not start. $status'
+                        : (widget.trackingEnabledPreference
+                            ? 'Tracking did not start. ${widget.status}'
                             : 'Tracking is stopped.'),
                   ),
-                  value: isTracking,
-                  onChanged: isChangingTrackingState
+                  value: widget.isTracking,
+                  onChanged: widget.isChangingTrackingState
                       ? null
-                      : onTrackingToggleChanged,
+                      : widget.onTrackingToggleChanged,
                 ),
                 const SizedBox(height: 10),
-                Text(trackingSummary),
+                Text(widget.trackingSummary),
               ],
             ),
           ),
@@ -195,16 +278,16 @@ class SettingsScreenView extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int>(
-                  initialValue: closePollSeconds,
+                  initialValue: widget.closePollSeconds,
                   decoration: const InputDecoration(
                     labelText: 'Poll when close to a location',
                     border: OutlineInputBorder(),
                   ),
-                  items: closePollSecondOptions
+                  items: widget.closePollSecondOptions
                       .map(
                         (int value) => DropdownMenuItem<int>(
                           value: value,
-                          child: Text(formatSecondsOption(value)),
+                          child: Text(widget.formatSecondsOption(value)),
                         ),
                       )
                       .toList(),
@@ -212,21 +295,21 @@ class SettingsScreenView extends StatelessWidget {
                     if (value == null) {
                       return;
                     }
-                    onClosePollSecondsChanged(value);
+                    widget.onClosePollSecondsChanged(value);
                   },
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int>(
-                  initialValue: farPollSeconds,
+                  initialValue: widget.farPollSeconds,
                   decoration: const InputDecoration(
                     labelText: 'Poll when far from any location',
                     border: OutlineInputBorder(),
                   ),
-                  items: farPollSecondOptions
+                  items: widget.farPollSecondOptions
                       .map(
                         (int value) => DropdownMenuItem<int>(
                           value: value,
-                          child: Text(formatSecondsOption(value)),
+                          child: Text(widget.formatSecondsOption(value)),
                         ),
                       )
                       .toList(),
@@ -234,21 +317,21 @@ class SettingsScreenView extends StatelessWidget {
                     if (value == null) {
                       return;
                     }
-                    onFarPollSecondsChanged(value);
+                    widget.onFarPollSecondsChanged(value);
                   },
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int>(
-                  initialValue: farDistanceMeters,
+                  initialValue: widget.farDistanceMeters,
                   decoration: const InputDecoration(
                     labelText: 'Consider far from locations at',
                     border: OutlineInputBorder(),
                   ),
-                  items: farDistanceMeterOptions
+                  items: widget.farDistanceMeterOptions
                       .map(
                         (int value) => DropdownMenuItem<int>(
                           value: value,
-                          child: Text(formatMetersOption(value)),
+                          child: Text(widget.formatMetersOption(value)),
                         ),
                       )
                       .toList(),
@@ -256,17 +339,17 @@ class SettingsScreenView extends StatelessWidget {
                     if (value == null) {
                       return;
                     }
-                    onFarDistanceMetersChanged(value);
+                    widget.onFarDistanceMetersChanged(value);
                   },
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<int>(
-                  initialValue: outOfGeofenceRetriggerMinutes,
+                  initialValue: widget.outOfGeofenceRetriggerMinutes,
                   decoration: const InputDecoration(
                     labelText: 'Out-of-geofence retrigger',
                     border: OutlineInputBorder(),
                   ),
-                  items: outOfGeofenceRetriggerMinuteOptions
+                  items: widget.outOfGeofenceRetriggerMinuteOptions
                       .map(
                         (int value) => DropdownMenuItem<int>(
                           value: value,
@@ -278,7 +361,7 @@ class SettingsScreenView extends StatelessWidget {
                     if (value == null) {
                       return;
                     }
-                    onOutOfGeofenceRetriggerMinutesChanged(value);
+                    widget.onOutOfGeofenceRetriggerMinutesChanged(value);
                   },
                 ),
                 const SizedBox(height: 10),
@@ -286,10 +369,10 @@ class SettingsScreenView extends StatelessWidget {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Hide nearest when far'),
                   subtitle: Text(
-                    'Hide nearest-location details when distance is beyond ${formatMetersOption(farDistanceMeters)}.',
+                    'Hide nearest-location details when distance is beyond ${widget.formatMetersOption(widget.farDistanceMeters)}.',
                   ),
-                  value: hideNearestWhenFar,
-                  onChanged: onHideNearestWhenFarChanged,
+                  value: widget.hideNearestWhenFar,
+                  onChanged: widget.onHideNearestWhenFarChanged,
                 ),
               ],
             ),
@@ -312,12 +395,12 @@ class SettingsScreenView extends StatelessWidget {
                   runSpacing: 8,
                   children: <Widget>[
                     OutlinedButton.icon(
-                      onPressed: onOpenLocationSettings,
+                      onPressed: widget.onOpenLocationSettings,
                       icon: const Icon(Icons.gps_fixed),
                       label: const Text('Location Settings'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: onOpenAppSettings,
+                      onPressed: widget.onOpenAppSettings,
                       icon: const Icon(Icons.admin_panel_settings_outlined),
                       label: const Text('App Permissions'),
                     ),

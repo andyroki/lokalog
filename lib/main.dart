@@ -180,6 +180,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
   static const String _trackingEnabledPreferenceKey = 'pref_tracking_enabled';
   static const String _trackingRuntimeStatePreferenceKey =
       'pref_tracking_runtime_state_v1';
+  static const String _locationLimitUnlockedPreferenceKey =
+      'pref_location_limit_unlocked';
+  static const String _locationLimitUnlockCode = 'arokicki';
   static const List<int> _closePollSecondOptions = <int>[30, 60, 300];
   static const List<int> _farPollSecondOptions = <int>[60, 300, 600];
   static const List<int> _farDistanceMeterOptions = <int>[
@@ -227,6 +230,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   bool _trackingRuntimeStateLoaded = false;
   bool _sitesLoaded = false;
   bool _trackingEnabledPreference = true;
+  bool _locationLimitUnlocked = false;
 
   Timer? _trackingTimer;
   Timer? _promptTimer;
@@ -285,6 +289,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     unawaited(_loadPollingPreferences());
     unawaited(_loadUnitPreference());
     unawaited(_loadTrackingPreference());
+    unawaited(_loadLocationLimitUnlockedPreference());
     unawaited(_loadTrackingRuntimeState());
     unawaited(_loadSites());
   }
@@ -520,6 +525,64 @@ class _ScenarioPageState extends State<ScenarioPage> {
     } catch (_) {
       // Keep local value even if persistence fails.
     }
+  }
+
+  Future<void> _loadLocationLimitUnlockedPreference() async {
+    try {
+      final bool? unlocked =
+          await ScenarioPreferencesService.loadBoolPreference(
+        _locationChannel,
+        key: _locationLimitUnlockedPreferenceKey,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _locationLimitUnlocked = unlocked ?? false;
+      });
+    } catch (_) {
+      // Keep locked by default when preference storage is unavailable.
+    }
+  }
+
+  Future<void> _saveLocationLimitUnlockedPreference() async {
+    try {
+      await ScenarioPreferencesService.saveBoolPreference(
+        _locationChannel,
+        key: _locationLimitUnlockedPreferenceKey,
+        value: _locationLimitUnlocked,
+      );
+    } catch (_) {
+      // Keep local unlock state if persistence fails.
+    }
+  }
+
+  void _onLocationUnlockCodeSubmitted(String rawCode) {
+    final String code = rawCode.trim().toLowerCase();
+    if (code != _locationLimitUnlockCode) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unlock code is not valid.')),
+      );
+      return;
+    }
+
+    if (_locationLimitUnlocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Location limit is already unlocked.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _locationLimitUnlocked = true;
+    });
+    unawaited(_saveLocationLimitUnlockedPreference());
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Location limit unlocked. You can now add more than 5.'),
+      ),
+    );
   }
 
   /// Format a metre value for display using current unit setting.
@@ -1744,6 +1807,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
         input.zip.trim().isEmpty;
   }
 
+  bool _hasReachedLocationLimit() {
+    return !_locationLimitUnlocked && _sites.length >= _maxSavedLocations;
+  }
+
+  String _locationLimitReachedMessage() {
+    return 'Only $_maxSavedLocations locations are allowed. Enter unlock code in Settings to add more.';
+  }
+
   bool _isDuplicateLocationName(String name, {int? excludingIndex}) {
     return _state.isDuplicateLocationName(
       name,
@@ -1752,15 +1823,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onAddNewLocation() async {
-    if (_sites.length >= _maxSavedLocations) {
+    if (_hasReachedLocationLimit()) {
       if (!mounted) {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Only $_maxSavedLocations locations are allowed. Delete one to add another.',
-          ),
+          content: Text(_locationLimitReachedMessage()),
         ),
       );
       return;
@@ -1832,15 +1901,13 @@ class _ScenarioPageState extends State<ScenarioPage> {
         requiredDwellMinutes: result.requiredMinutes,
       );
 
-      if (_sites.length >= _maxSavedLocations) {
+      if (_hasReachedLocationLimit()) {
         if (!mounted) {
           return;
         }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              'Only $_maxSavedLocations locations are allowed. Delete one to add another.',
-            ),
+            content: Text(_locationLimitReachedMessage()),
           ),
         );
         return;
@@ -1935,16 +2002,14 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _onAddFromCurrentLocation() async {
-    if (_sites.length >= _maxSavedLocations || _isFetchingCurrentLocation) {
+    if (_hasReachedLocationLimit() || _isFetchingCurrentLocation) {
       if (!mounted) {
         return;
       }
-      if (_sites.length >= _maxSavedLocations) {
+      if (_hasReachedLocationLimit()) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              'Only $_maxSavedLocations locations are allowed. Delete one to add another.',
-            ),
+            content: Text(_locationLimitReachedMessage()),
           ),
         );
       }
@@ -2059,12 +2124,10 @@ class _ScenarioPageState extends State<ScenarioPage> {
         continue;
       }
 
-      if (_sites.length >= _maxSavedLocations) {
+      if (_hasReachedLocationLimit()) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              'Only $_maxSavedLocations locations are allowed. Delete one to add another.',
-            ),
+            content: Text(_locationLimitReachedMessage()),
           ),
         );
         setState(() {
@@ -2439,15 +2502,91 @@ class _ScenarioPageState extends State<ScenarioPage> {
       formatMetersOption: _formatMetersOption,
       onOpenLocationSettings: _openLocationSettings,
       onOpenAppSettings: _openAppSettings,
+      locationLimitUnlocked: _locationLimitUnlocked,
+      onLocationUnlockCodeSubmitted: _onLocationUnlockCodeSubmitted,
     );
   }
 
   Widget _buildLocationsScreen() {
-    return LocationsScreenView(
-      sites: _sites,
-      onResetAllSites: _onResetAllSites,
-      onEditLocation: _onEditLocation,
-      onDeleteLocation: _onDeleteLocation,
+    return Column(
+      children: <Widget>[
+        Expanded(
+          child: LocationsScreenView(
+            sites: _sites,
+            onResetAllSites: _onResetAllSites,
+            onEditLocation: _onEditLocation,
+            onDeleteLocation: _onDeleteLocation,
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Material(
+            elevation: 8,
+            color: Theme.of(context).colorScheme.surface,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _hasReachedLocationLimit() ||
+                              _isFetchingCurrentLocation
+                          ? null
+                          : () async {
+                              final bool shouldContinue =
+                                  await ScenarioDialogService
+                                      .confirmAddLocationAction(
+                                context,
+                                useCurrentLocation: true,
+                              );
+                              if (!shouldContinue) {
+                                return;
+                              }
+                              await _onAddFromCurrentLocation();
+                            },
+                      icon: _isFetchingCurrentLocation
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Icon(Icons.my_location),
+                      label: const Text('Current Location'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: _hasReachedLocationLimit()
+                          ? null
+                          : () async {
+                              final bool shouldContinue =
+                                  await ScenarioDialogService
+                                      .confirmAddLocationAction(
+                                context,
+                                useCurrentLocation: false,
+                              );
+                              if (!shouldContinue) {
+                                return;
+                              }
+                              await _onAddNewLocation();
+                            },
+                      icon: const Icon(Icons.add_location_alt),
+                      label: Text(
+                        _hasReachedLocationLimit()
+                            ? 'Limit Reached'
+                            : 'Add New',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -2530,61 +2669,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
           if (_debugModeEnabled) _buildDebugScreen(),
         ],
       ),
-      floatingActionButton: _selectedTabIndex == 1
-          ? Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                FloatingActionButton.extended(
-                  onPressed: _sites.length >= _maxSavedLocations ||
-                          _isFetchingCurrentLocation
-                      ? null
-                      : () async {
-                          final bool shouldContinue =
-                              await ScenarioDialogService
-                                  .confirmAddLocationAction(
-                            context,
-                            useCurrentLocation: true,
-                          );
-                          if (!shouldContinue) {
-                            return;
-                          }
-                          await _onAddFromCurrentLocation();
-                        },
-                  icon: _isFetchingCurrentLocation
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.my_location),
-                  label: const Text('Current Location'),
-                ),
-                const SizedBox(width: 10),
-                FloatingActionButton.extended(
-                  onPressed: _sites.length >= _maxSavedLocations
-                      ? null
-                      : () async {
-                          final bool shouldContinue =
-                              await ScenarioDialogService
-                                  .confirmAddLocationAction(
-                            context,
-                            useCurrentLocation: false,
-                          );
-                          if (!shouldContinue) {
-                            return;
-                          }
-                          await _onAddNewLocation();
-                        },
-                  icon: const Icon(Icons.add_location_alt),
-                  label: Text(
-                    _sites.length >= _maxSavedLocations
-                        ? 'Max 5 Reached'
-                        : 'Add New',
-                  ),
-                ),
-              ],
-            )
-          : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedTabIndex,
         onDestinationSelected: (int index) {
