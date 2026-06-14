@@ -757,8 +757,32 @@ class _ScenarioPageState extends State<ScenarioPage>
     };
   }
 
+  Map<String, double> _projectedOutOfGeofenceMinutesBySite() {
+    final DateTime now = DateTime.now();
+    return <String, double>{
+      for (final JobSite site in _sites)
+        site.address: _liveOutOfGeofenceMinutes(site, now),
+    };
+  }
+
+  double _liveOutOfGeofenceMinutes(JobSite site, DateTime now) {
+    final DateTime? outSince = _outOfGeofenceSince[site.address];
+    if (outSince == null) {
+      return 0;
+    }
+    return min(
+      24 * 60,
+      max(
+        0,
+        now.difference(outSince).inMilliseconds / 60000,
+      ),
+    );
+  }
+
   String _locationTrackingStatesDebugSummary() {
     final List<LocationTrackingState> states = _buildLocationTrackingStates();
+    final Map<String, double> projectedOutOfGeofenceMinutes =
+        _projectedOutOfGeofenceMinutesBySite();
     if (states.isEmpty) {
       return 'Location Tracking State\nNo saved locations.';
     }
@@ -770,19 +794,9 @@ class _ScenarioPageState extends State<ScenarioPage>
       final String timeInGeofence =
           state.timeInGeofenceMinutes.toStringAsFixed(1);
       final String remaining = state.remainingMinutes.toStringAsFixed(1);
-      final DateTime? outSince =
-          _outOfGeofenceSince[_siteAddressByName(state.name)];
-      final double outMinutes = outSince == null
-          ? 0
-          : min(
-              24 * 60,
-              max(
-                0,
-                DateTime.now().difference(outSince).inMilliseconds / 60000,
-              ),
-            );
-      final String outDuration =
-          outSince == null ? '0.0m' : '${outMinutes.toStringAsFixed(1)}m';
+      final String address = _siteAddressByName(state.name);
+      final double outMinutes = projectedOutOfGeofenceMinutes[address] ?? 0;
+      final String outDuration = '${outMinutes.toStringAsFixed(1)}m';
       return '${state.name}\n'
           '  in geofence: ${state.inGeofence}  |  out: ${state.outOfGeofence}  |  far: ${state.far}  |  dist: $dist\n'
           '  time in geofence: ${timeInGeofence}m  |  out-of-geofence: $outDuration  |  remaining: ${remaining}m\n'
@@ -887,6 +901,57 @@ class _ScenarioPageState extends State<ScenarioPage>
         'Candidate: $candidate\n'
         'Pending prompt: $pending (countdown: $_promptCountdown s)\n'
         'Out-of-geofence timers: ${_outOfGeofenceSince.length}';
+  }
+
+  String _startupLoggingDiagnosticsSummary() {
+    final DateTime now = DateTime.now();
+    final bool startupReady = _trackingPreferenceLoaded &&
+        _trackingRuntimeStateLoaded &&
+        _sitesLoaded;
+    final String lastFixAge = _lastFixAt == null
+        ? 'n/a'
+        : '${now.difference(_lastFixAt!).inSeconds}s ago';
+    final SiteDistance? nearest = _latestNearest;
+    final JobSite? nearestSite = nearest?.site;
+
+    String nearestBlock = 'Nearest logging diagnostics\nNo nearest site yet.';
+    if (nearestSite != null) {
+      final String address = nearestSite.address;
+      final double baseDwell = _timeInGeofenceMinutesBySite[address] ?? 0;
+      final double projectedDwell = _liveTimeInGeofenceMinutes(nearestSite);
+      final double outMinutes = _liveOutOfGeofenceMinutes(nearestSite, now);
+      final bool logged = _sessionLoggedAddresses.contains(address);
+      final DateTime? outSince = _outOfGeofenceSince[address];
+
+      nearestBlock = 'Nearest logging diagnostics\n'
+          'Site: ${nearestSite.name}\n'
+          'Address: $address\n'
+          'Distance: ${_fmtDist(nearest.distanceMeters)}\n'
+          'Logged this session: $logged\n'
+          'Required dwell: ${nearestSite.requiredDwellMinutes}m\n'
+          'Base dwell map: ${baseDwell.toStringAsFixed(2)}m\n'
+          'Projected dwell: ${projectedDwell.toStringAsFixed(2)}m\n'
+          'Out-of-geofence: ${outMinutes.toStringAsFixed(2)}m\n'
+          'Out since: ${outSince == null ? 'none' : _formatLogTimestamp(outSince)}';
+    }
+
+    return 'Startup and logging gates\n'
+        'Startup ready: $startupReady\n'
+        'Tracking pref loaded: $_trackingPreferenceLoaded\n'
+        'Runtime state loaded: $_trackingRuntimeStateLoaded\n'
+        'Sites loaded: $_sitesLoaded\n'
+        'Auto-start attempted: $_autoStartTrackingAttempted\n'
+        'Tracking-off dialog shown: $_trackingOffStartupDialogShown\n'
+        'Tracking enabled pref: $_trackingEnabledPreference\n'
+        'Tracking active: $_isTracking\n'
+        'Last fix age: $lastFixAge\n'
+        'Current status: $_status\n'
+        'Candidate site: ${_candidateSite?.name ?? 'none'}\n'
+        'Pending prompt site: ${_pendingSite?.name ?? 'none'}\n'
+        'Stable samples: $_stableSamples/$_requiredStableSamples\n'
+        'Prompt countdown: ${_promptCountdown}s\n'
+        'Close/Far polling sec: $_closePollSeconds/$_farPollSeconds\n\n'
+        '$nearestBlock';
   }
 
   bool _shouldHideNearestInfo(SiteDistance nearest) {
@@ -1660,6 +1725,18 @@ class _ScenarioPageState extends State<ScenarioPage>
       return base;
     }
     if (_sessionLoggedAddresses.contains(site.address)) {
+      return base;
+    }
+
+    // If a site has already started accumulating dwell time, keep the
+    // displayed value advancing between GPS polls even if the last fix drifts
+    // slightly outside the fence.
+    if (base > 0) {
+      final double elapsedMinutes =
+          DateTime.now().difference(_lastFixAt!).inMilliseconds / 60000;
+      if (elapsedMinutes > 0) {
+        return base + elapsedMinutes;
+      }
       return base;
     }
 
@@ -2539,13 +2616,21 @@ class _ScenarioPageState extends State<ScenarioPage>
       pendingSite: _pendingSite,
       promptCountdown: _promptCountdown,
       logs: _logs,
+      timeInGeofenceMinutesByAddress: _projectedTimeInGeofenceMinutesBySite(),
+      outOfGeofenceMinutesByAddress: _projectedOutOfGeofenceMinutesBySite(),
       formatLogTimestamp: _formatLogTimestamp,
       buildNearestMessage: (SiteDistance nearest) {
         if (_shouldHideNearestInfo(nearest)) {
           return 'Nearest location is currently far (${_fmtDist(nearest.distanceMeters)}). Move closer to start countdown.';
         }
+        final double timeInGeofence =
+            _projectedTimeInGeofenceMinutesBySite()[nearest.site.address] ?? 0;
+        final double timeOutGeofence =
+            _liveOutOfGeofenceMinutes(nearest.site, DateTime.now());
         return 'Countdown to log ${nearest.site.name}: '
-            '${_minutesRemainingToLog(nearest.site).toStringAsFixed(1)} minutes remaining';
+            '${_minutesRemainingToLog(nearest.site).toStringAsFixed(1)} minutes remaining\n'
+            'Time in geofence: ${timeInGeofence.toStringAsFixed(1)} min | '
+            'Time out geofence: ${timeOutGeofence.toStringAsFixed(1)} min';
       },
       onDismissPendingPrompt: _dismissPendingPrompt,
       onLogNow: (JobSite site) {
@@ -2760,6 +2845,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       pollingDebugSummary: _pollingDebugSummary(),
       appReadinessDebugSummary: _appReadinessDebugSummary(),
       geofenceDecisionDebugSummary: _geofenceDecisionDebugSummary(),
+      startupLoggingDiagnosticsSummary: _startupLoggingDiagnosticsSummary(),
       rawGpsDebugSummary: _rawGpsDebugSummary(),
       trackingRuntimeStateDebugSummary: _trackingRuntimeStateDebugSummary(),
       locationTrackingStatesDebugSummary: _locationTrackingStatesDebugSummary(),

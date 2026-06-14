@@ -11,6 +11,8 @@ class LogScreenView extends StatelessWidget {
     required this.pendingSite,
     required this.promptCountdown,
     required this.logs,
+    required this.timeInGeofenceMinutesByAddress,
+    required this.outOfGeofenceMinutesByAddress,
     required this.formatLogTimestamp,
     required this.buildNearestMessage,
     required this.onDismissPendingPrompt,
@@ -28,6 +30,8 @@ class LogScreenView extends StatelessWidget {
   final JobSite? pendingSite;
   final int promptCountdown;
   final List<JobLog> logs;
+  final Map<String, double> timeInGeofenceMinutesByAddress;
+  final Map<String, double> outOfGeofenceMinutesByAddress;
   final String Function(DateTime value) formatLogTimestamp;
   final String Function(SiteDistance nearest) buildNearestMessage;
   final VoidCallback onDismissPendingPrompt;
@@ -158,6 +162,10 @@ class LogScreenView extends StatelessWidget {
             final String notes = log.notes.trim();
             final bool showAddressLine =
                 address.isNotEmpty && address != clientName;
+            final double timeInGeofence =
+                timeInGeofenceMinutesByAddress[address] ?? 0;
+            final double outOfGeofence =
+                outOfGeofenceMinutesByAddress[address] ?? 0;
             return Card(
               color: Theme.of(context).brightness == Brightness.dark
                   ? Theme.of(context).colorScheme.surfaceContainerHigh
@@ -203,6 +211,8 @@ class LogScreenView extends StatelessWidget {
                       '${formatLogTimestamp(log.timestamp)}\n'
                       'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
                       '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}'
+                      '\nTime in geofence: ${timeInGeofence.toStringAsFixed(1)}m | '
+                      'Time out geofence: ${outOfGeofence.toStringAsFixed(1)}m'
                       '${notes.isEmpty ? '' : '\nNotes: $notes'}',
                     ),
                   ],

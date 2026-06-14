@@ -11,6 +11,7 @@ class DebugScreenView extends StatelessWidget {
     required this.pollingDebugSummary,
     required this.appReadinessDebugSummary,
     required this.geofenceDecisionDebugSummary,
+    required this.startupLoggingDiagnosticsSummary,
     required this.rawGpsDebugSummary,
     required this.trackingRuntimeStateDebugSummary,
     required this.locationTrackingStatesDebugSummary,
@@ -31,6 +32,7 @@ class DebugScreenView extends StatelessWidget {
   final String pollingDebugSummary;
   final String appReadinessDebugSummary;
   final String geofenceDecisionDebugSummary;
+  final String startupLoggingDiagnosticsSummary;
   final String rawGpsDebugSummary;
   final String trackingRuntimeStateDebugSummary;
   final String locationTrackingStatesDebugSummary;
@@ -83,6 +85,13 @@ class DebugScreenView extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Text(geofenceDecisionDebugSummary),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(startupLoggingDiagnosticsSummary),
           ),
         ),
         const SizedBox(height: 12),
