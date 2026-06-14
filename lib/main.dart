@@ -913,6 +913,8 @@ class _ScenarioPageState extends State<ScenarioPage>
         : '${now.difference(_lastFixAt!).inSeconds}s ago';
     final SiteDistance? nearest = _latestNearest;
     final JobSite? nearestSite = nearest?.site;
+    final String nearestDistance =
+        nearest == null ? 'n/a' : _fmtDist(nearest.distanceMeters);
 
     String nearestBlock = 'Nearest logging diagnostics\nNo nearest site yet.';
     if (nearestSite != null) {
@@ -926,7 +928,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       nearestBlock = 'Nearest logging diagnostics\n'
           'Site: ${nearestSite.name}\n'
           'Address: $address\n'
-          'Distance: ${_fmtDist(nearest.distanceMeters)}\n'
+          'Distance: $nearestDistance\n'
           'Logged this session: $logged\n'
           'Required dwell: ${nearestSite.requiredDwellMinutes}m\n'
           'Base dwell map: ${baseDwell.toStringAsFixed(2)}m\n'
