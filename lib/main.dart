@@ -234,6 +234,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   Timer? _trackingTimer;
   Timer? _promptTimer;
+  Timer? _uiRefreshTimer;
 
   LocationFix? _currentFix;
   String _status = 'Open Settings to start tracking.';
@@ -751,13 +752,32 @@ class _ScenarioPageState extends State<ScenarioPage> {
       final String timeInGeofence =
           state.timeInGeofenceMinutes.toStringAsFixed(1);
       final String remaining = state.remainingMinutes.toStringAsFixed(1);
+      final DateTime? outSince =
+          _outOfGeofenceSince[_siteAddressByName(state.name)];
+      final double outMinutes = outSince == null
+          ? 0
+          : max(
+              0,
+              DateTime.now().difference(outSince).inMilliseconds / 60000,
+            );
+      final String outDuration =
+          outSince == null ? '0.0m' : '${outMinutes.toStringAsFixed(1)}m';
       return '${state.name}\n'
           '  in geofence: ${state.inGeofence}  |  out: ${state.outOfGeofence}  |  far: ${state.far}  |  dist: $dist\n'
-          '  time in geofence: ${timeInGeofence}m  |  remaining: ${remaining}m\n'
+          '  time in geofence: ${timeInGeofence}m  |  out-of-geofence: $outDuration  |  remaining: ${remaining}m\n'
           '  logged: ${state.logged}  |  waiting: ${state.waitingToGetLogged}';
     }).join('\n\n');
 
     return 'Location Tracking State\n\n$lines';
+  }
+
+  String _siteAddressByName(String siteName) {
+    for (final JobSite site in _sites) {
+      if (site.name == siteName) {
+        return site.address;
+      }
+    }
+    return '';
   }
 
   String _rawGpsDebugSummary() {
@@ -876,6 +896,18 @@ class _ScenarioPageState extends State<ScenarioPage> {
       Duration(seconds: _activePollSeconds()),
       () => unawaited(_pollAndReschedule()),
     );
+  }
+
+  void _startLiveUiTicker() {
+    _uiRefreshTimer?.cancel();
+    _uiRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || !_isTracking) {
+        return;
+      }
+      setState(() {
+        // Rebuild to refresh projected countdown values between GPS polls.
+      });
+    });
   }
 
   List<JobSite> _defaultSites() {
@@ -1216,6 +1248,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   void dispose() {
     _trackingTimer?.cancel();
     _promptTimer?.cancel();
+    _uiRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -1239,6 +1272,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
         : 'Tracking started. Reading live GPS signal...';
 
     _scheduleNextPoll(immediate: true);
+    _startLiveUiTicker();
     setState(() {});
     unawaited(_saveTrackingRuntimeState());
   }
@@ -1480,6 +1514,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
     _trackingTimer?.cancel();
     _trackingTimer = null;
     _promptTimer?.cancel();
+    _uiRefreshTimer?.cancel();
+    _uiRefreshTimer = null;
     unawaited(_cancelLogReminderNotification());
     setState(() {
       _isTracking = false;
@@ -1589,10 +1625,41 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   double _minutesRemainingToLog(JobSite site) {
-    return LocationTrackingCalculator.minutesRemainingToLog(
-      site,
-      _timeInGeofenceMinutesBySite,
+    final double required = site.requiredDwellMinutes.toDouble();
+    final double liveTimeInGeofence = _liveTimeInGeofenceMinutes(site);
+    return max(0, required - liveTimeInGeofence);
+  }
+
+  double _liveTimeInGeofenceMinutes(JobSite site) {
+    final double base = _timeInGeofenceMinutesBySite[site.address] ?? 0;
+    if (!_isTracking || _lastFixAt == null || _currentFix == null) {
+      return base;
+    }
+    if (_sessionLoggedAddresses.contains(site.address)) {
+      return base;
+    }
+
+    final LocationFix fix = _currentFix!;
+    final double distance = LocationTrackingCalculator.distanceMetersBetween(
+      fix.lat,
+      fix.lng,
+      site.lat,
+      site.lng,
     );
+    final double effectiveRadius = max(
+      _matchRadiusMeters,
+      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+    );
+    if (distance > effectiveRadius) {
+      return base;
+    }
+
+    final double elapsedMinutes =
+        DateTime.now().difference(_lastFixAt!).inMilliseconds / 60000;
+    if (elapsedMinutes <= 0) {
+      return base;
+    }
+    return base + elapsedMinutes;
   }
 
   void _showConfirmationPrompt(JobSite site) {
@@ -1755,8 +1822,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
     required double effectiveRadius,
     required bool hideNearestDetails,
   }) {
-    final double timeInGeofence =
-        _timeInGeofenceMinutesBySite[nearest.site.address] ?? 0;
+    final double timeInGeofence = _liveTimeInGeofenceMinutes(nearest.site);
     final double remaining = _minutesRemainingToLog(nearest.site);
     final String accuracyLabel =
         goodAccuracy ? 'good' : 'poor (nearest estimate may drift)';
