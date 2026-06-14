@@ -162,7 +162,8 @@ class ScenarioPage extends StatefulWidget {
   State<ScenarioPage> createState() => _ScenarioPageState();
 }
 
-class _ScenarioPageState extends State<ScenarioPage> {
+class _ScenarioPageState extends State<ScenarioPage>
+    with WidgetsBindingObserver {
   static const MethodChannel _locationChannel =
       MethodChannel('lokalog/location');
   static const String _debugModePreferenceKey = 'pref_debug_mode';
@@ -287,6 +288,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeAppVersionLabel();
     unawaited(_loadDebugMode());
     unawaited(_loadPollingPreferences());
@@ -296,6 +298,15 @@ class _ScenarioPageState extends State<ScenarioPage> {
     unawaited(_refreshBackgroundLocationPermissionStatus());
     unawaited(_loadTrackingRuntimeState());
     unawaited(_loadSites());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      unawaited(_saveTrackingRuntimeState());
+    }
   }
 
   Future<void> _refreshBackgroundLocationPermissionStatus() async {
@@ -731,12 +742,19 @@ class _ScenarioPageState extends State<ScenarioPage> {
       fix: _currentFix,
       farDistanceMeters: _farDistanceMeters,
       matchRadiusMeters: _matchRadiusMeters,
-      timeInGeofenceMinutes: _timeInGeofenceMinutesBySite,
+      timeInGeofenceMinutes: _projectedTimeInGeofenceMinutesBySite(),
       sessionLoggedAddresses: _sessionLoggedAddresses,
       pendingSite: _pendingSite,
       candidateSite: _candidateSite,
       now: DateTime.now(),
     );
+  }
+
+  Map<String, double> _projectedTimeInGeofenceMinutesBySite() {
+    return <String, double>{
+      for (final JobSite site in _sites)
+        site.address: _liveTimeInGeofenceMinutes(site),
+    };
   }
 
   String _locationTrackingStatesDebugSummary() {
@@ -1250,6 +1268,8 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_saveTrackingRuntimeState());
     _trackingTimer?.cancel();
     _promptTimer?.cancel();
     _uiRefreshTimer?.cancel();
@@ -2479,7 +2499,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
 
     setState(() {
       _state.removeLogAt(index);
-      _status = 'Deleted one log entry.';
     });
 
     try {
@@ -2510,10 +2529,6 @@ class _ScenarioPageState extends State<ScenarioPage> {
     setState(() {
       _state.updateLogNotes(index, updatedNotes);
     });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Log notes updated.')),
-    );
   }
 
   Widget _buildLogScreen() {
