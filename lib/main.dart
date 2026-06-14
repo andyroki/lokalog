@@ -265,9 +265,9 @@ class _ScenarioPageState extends State<ScenarioPage> {
   bool _isLoadingBatteryUsage = false;
   bool _usageAccessGranted = false;
   static const String _fallbackVersion =
-      String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
+      String.fromEnvironment('APP_VERSION', defaultValue: '1.0.1');
   static const String _fallbackBuildNumber =
-      String.fromEnvironment('APP_BUILD_NUMBER', defaultValue: '1');
+      String.fromEnvironment('APP_BUILD_NUMBER', defaultValue: '2');
   String _appVersionLabel = '$_fallbackVersion ($_fallbackBuildNumber)';
   String? _batteryUsageError;
   int? _deviceBatteryLevel;
