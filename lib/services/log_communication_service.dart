@@ -59,7 +59,7 @@ class LogCommunicationService {
     );
   }
 
-  static Future<void> addLogToCalendar({
+  static Future<bool> addLogToCalendar({
     required BuildContext context,
     required MethodChannel channel,
     required JobLog log,
@@ -83,17 +83,21 @@ class LogCommunicationService {
           'endMillis': endMillis,
         },
       );
+      return true;
     } on MissingPluginException {
       _showSnack(
           context, 'Calendar add is currently supported on Android only.');
+      return false;
     } on PlatformException catch (error) {
       if (error.code == 'CALENDAR_UNAVAILABLE') {
         _showSnack(context, 'No calendar app found on this device.');
       } else {
         _showSnack(context, 'Could not open calendar app.');
       }
+      return false;
     } catch (_) {
       _showSnack(context, 'Could not open calendar app.');
+      return false;
     }
   }
 

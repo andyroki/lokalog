@@ -162,39 +162,48 @@ class LogScreenView extends StatelessWidget {
               color: Theme.of(context).brightness == Brightness.dark
                   ? Theme.of(context).colorScheme.surfaceContainerHigh
                   : null,
-              child: ListTile(
-                title: Text('Customer: $clientName'),
-                subtitle: Text(
-                  '${showAddressLine ? '$address\n' : ''}'
-                  '${formatLogTimestamp(log.timestamp)}\n'
-                  'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
-                  '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}'
-                  '${notes.isEmpty ? '' : '\nNotes: $notes'}',
-                ),
-                isThreeLine: showAddressLine,
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    IconButton(
-                      tooltip: 'Share log',
-                      onPressed: () => onShareLogEntry(log),
-                      icon: const Icon(Icons.share),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Wrap(
+                        alignment: WrapAlignment.end,
+                        children: <Widget>[
+                          IconButton(
+                            tooltip: 'Share log',
+                            onPressed: () => onShareLogEntry(log),
+                            icon: const Icon(Icons.share),
+                          ),
+                          IconButton(
+                            tooltip: 'Add to calendar',
+                            onPressed: () => onAddLogToCalendar(log),
+                            icon: _buildCalendarIcon(log.calendarAdded),
+                          ),
+                          IconButton(
+                            tooltip: 'Edit log notes',
+                            onPressed: () => onEditLogEntry(index, log),
+                            icon: const Icon(Icons.edit_note),
+                          ),
+                          IconButton(
+                            tooltip: 'Delete log',
+                            onPressed: () => onDeleteLogEntry(index, log),
+                            icon: const Icon(Icons.delete),
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ],
+                      ),
                     ),
-                    IconButton(
-                      tooltip: 'Add to calendar',
-                      onPressed: () => onAddLogToCalendar(log),
-                      icon: const Icon(Icons.event_available),
-                    ),
-                    IconButton(
-                      tooltip: 'Edit log notes',
-                      onPressed: () => onEditLogEntry(index, log),
-                      icon: const Icon(Icons.edit_note),
-                    ),
-                    IconButton(
-                      tooltip: 'Delete log',
-                      onPressed: () => onDeleteLogEntry(index, log),
-                      icon: const Icon(Icons.delete),
-                      color: Theme.of(context).colorScheme.error,
+                    Text('Customer: $clientName'),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${showAddressLine ? '$address\n' : ''}'
+                      '${formatLogTimestamp(log.timestamp)}\n'
+                      'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
+                      '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}'
+                      '${notes.isEmpty ? '' : '\nNotes: $notes'}',
                     ),
                   ],
                 ),
@@ -211,5 +220,27 @@ class LogScreenView extends StatelessWidget {
 
   String _fmtSpeed(double metersPerSecond) {
     return '${metersPerSecond.toStringAsFixed(1)} m/s';
+  }
+
+  Widget _buildCalendarIcon(bool calendarAdded) {
+    if (!calendarAdded) {
+      return const Icon(Icons.event_available);
+    }
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        const Icon(Icons.event_available),
+        Positioned(
+          right: -2,
+          top: -2,
+          child: Icon(
+            Icons.check_circle,
+            size: 14,
+            color: Colors.green.shade600,
+          ),
+        ),
+      ],
+    );
   }
 }

@@ -119,6 +119,7 @@ class JobLog {
     required this.confidence,
     required this.confirmedByUser,
     required this.autoLogged,
+    this.calendarAdded = false,
     required this.timestamp,
   });
 
@@ -130,6 +131,7 @@ class JobLog {
   final double confidence;
   final bool confirmedByUser;
   final bool autoLogged;
+  final bool calendarAdded;
   final DateTime timestamp;
 
   JobLog copyWith({
@@ -141,6 +143,7 @@ class JobLog {
     double? confidence,
     bool? confirmedByUser,
     bool? autoLogged,
+    bool? calendarAdded,
     DateTime? timestamp,
   }) {
     return JobLog(
@@ -152,6 +155,7 @@ class JobLog {
       confidence: confidence ?? this.confidence,
       confirmedByUser: confirmedByUser ?? this.confirmedByUser,
       autoLogged: autoLogged ?? this.autoLogged,
+      calendarAdded: calendarAdded ?? this.calendarAdded,
       timestamp: timestamp ?? this.timestamp,
     );
   }

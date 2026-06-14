@@ -63,13 +63,28 @@ class ScenarioStateController {
     logs[index] = logs[index].copyWith(notes: notes);
   }
 
+  void markLogCalendarAdded(String address, DateTime timestamp) {
+    final int index = logs.indexWhere(
+      (JobLog log) =>
+          log.address == address &&
+          log.timestamp.millisecondsSinceEpoch ==
+              timestamp.millisecondsSinceEpoch,
+    );
+    if (index == -1 || logs[index].calendarAdded) {
+      return;
+    }
+    logs[index] = logs[index].copyWith(calendarAdded: true);
+  }
+
   void mergeLoadedLogs(Iterable<JobLog> loadedLogs) {
     final Set<String> existing = logs
-        .map((JobLog log) => '${log.address}|${log.timestamp.millisecondsSinceEpoch}')
+        .map((JobLog log) =>
+            '${log.address}|${log.timestamp.millisecondsSinceEpoch}')
         .toSet();
 
     for (final JobLog log in loadedLogs) {
-      final String key = '${log.address}|${log.timestamp.millisecondsSinceEpoch}';
+      final String key =
+          '${log.address}|${log.timestamp.millisecondsSinceEpoch}';
       if (existing.add(key)) {
         logs.insert(0, log);
       }
@@ -77,7 +92,8 @@ class ScenarioStateController {
   }
 
   void pruneTrackingStateToKnownSites() {
-    final Set<String> validAddresses = sites.map((JobSite site) => site.address).toSet();
+    final Set<String> validAddresses =
+        sites.map((JobSite site) => site.address).toSet();
 
     sessionLoggedAddresses.removeWhere(
       (String address) => !validAddresses.contains(address),

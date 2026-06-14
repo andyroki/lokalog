@@ -756,9 +756,12 @@ class _ScenarioPageState extends State<ScenarioPage> {
           _outOfGeofenceSince[_siteAddressByName(state.name)];
       final double outMinutes = outSince == null
           ? 0
-          : max(
-              0,
-              DateTime.now().difference(outSince).inMilliseconds / 60000,
+          : min(
+              24 * 60,
+              max(
+                0,
+                DateTime.now().difference(outSince).inMilliseconds / 60000,
+              ),
             );
       final String outDuration =
           outSince == null ? '0.0m' : '${outMinutes.toStringAsFixed(1)}m';
@@ -1165,6 +1168,7 @@ class _ScenarioPageState extends State<ScenarioPage> {
           confidence: ((item['confidence'] as num?)?.toDouble() ?? 100),
           confirmedByUser: (item['confirmedByUser'] as bool?) ?? false,
           autoLogged: (item['autoLogged'] as bool?) ?? true,
+          calendarAdded: (item['calendarAdded'] as bool?) ?? false,
           timestamp: DateTime.fromMillisecondsSinceEpoch(
             timestampMillis,
           ),
@@ -1887,11 +1891,17 @@ class _ScenarioPageState extends State<ScenarioPage> {
   }
 
   Future<void> _addLogToCalendar(JobLog log) async {
-    await LogCommunicationService.addLogToCalendar(
+    final bool opened = await LogCommunicationService.addLogToCalendar(
       context: context,
       channel: _locationChannel,
       log: log,
     );
+    if (!opened || !mounted) {
+      return;
+    }
+    setState(() {
+      _state.markLogCalendarAdded(log.address, log.timestamp);
+    });
   }
 
   Future<void> _showLogReminderNotification(JobSite site, int countdown) async {
