@@ -707,6 +707,18 @@ class _ScenarioPageState extends State<ScenarioPage>
     return _closePollSeconds;
   }
 
+  int _effectiveRequiredStableSamples() {
+    final int activePollSeconds = _activePollSeconds();
+    // Prevent long poll intervals from doubling/ tripling practical dwell time.
+    if (activePollSeconds >= 300) {
+      return 1;
+    }
+    if (activePollSeconds >= 120) {
+      return 2;
+    }
+    return _requiredStableSamples;
+  }
+
   String _pollingModeSummary() {
     if (_currentFix == null || _sites.isEmpty) {
       return 'close';
@@ -898,6 +910,7 @@ class _ScenarioPageState extends State<ScenarioPage>
         '$nearestLine\n'
         '$fixLine\n'
         'Stable samples: $_stableSamples / $_requiredStableSamples\n'
+        'Effective stable requirement now: ${_effectiveRequiredStableSamples()}\n'
         'Candidate: $candidate\n'
         'Pending prompt: $pending (countdown: $_promptCountdown s)\n'
         'Out-of-geofence timers: ${_outOfGeofenceSince.length}';
@@ -951,6 +964,7 @@ class _ScenarioPageState extends State<ScenarioPage>
         'Candidate site: ${_candidateSite?.name ?? 'none'}\n'
         'Pending prompt site: ${_pendingSite?.name ?? 'none'}\n'
         'Stable samples: $_stableSamples/$_requiredStableSamples\n'
+        'Effective stable requirement now: ${_effectiveRequiredStableSamples()}\n'
         'Prompt countdown: ${_promptCountdown}s\n'
         'Close/Far polling sec: $_closePollSeconds/$_farPollSeconds\n\n'
         '$nearestBlock';
@@ -1678,7 +1692,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       matchRadiusMeters: _matchRadiusMeters,
       maxAccuracyMeters: _maxAccuracyMeters,
       maxSpeedForDwell: _maxSpeedForDwell,
-      requiredStableSamples: _requiredStableSamples,
+      requiredStableSamples: _effectiveRequiredStableSamples(),
       currentCandidateSite: _candidateSite,
       currentStableSamples: _stableSamples,
       pendingSite: _pendingSite,
