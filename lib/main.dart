@@ -39,7 +39,7 @@ class _LokaLogAppState extends State<LokaLogApp> {
   static const String _darkModePreferenceKey = 'pref_dark_mode';
   static const String _fontScalePreferenceKey = 'pref_font_scale';
   static const double _minFontScale = 0.85;
-  static const double _maxFontScale = 1.35;
+  static const double _maxFontScale = 1.5;
   static const double _fontScaleStep = 0.1;
   ThemeMode _themeMode = ThemeMode.light;
   double _fontScale = 1.0;
