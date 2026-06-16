@@ -206,6 +206,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   static const Duration _gpsReadTimeout = Duration(seconds: 20);
   static const int _maxSavedLocations = 5;
   static const int _requiredStableSamples = 3;
+  static const int _duplicateLogGuardMinutes = 2;
   static const double _maxAccuracyMeters = 50;
   static const double _maxSpeedForDwell = 1.2;
   static const double _matchRadiusMeters = 100;
@@ -1893,6 +1894,40 @@ class _ScenarioPageState extends State<ScenarioPage>
       return;
     }
 
+    final DateTime now = DateTime.now();
+    final JobLog? latestForSite = _logs.cast<JobLog?>().firstWhere(
+          (JobLog? log) => log?.address == site.address,
+          orElse: () => null,
+        );
+    if (latestForSite != null) {
+      final double minutesSinceLast =
+          now.difference(latestForSite.timestamp).inMilliseconds / 60000;
+      final double effectiveRadius = max(
+        _matchRadiusMeters,
+        min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+      );
+      final double distance = LocationTrackingCalculator.distanceMetersBetween(
+        fix.lat,
+        fix.lng,
+        site.lat,
+        site.lng,
+      );
+      final bool stillInside = distance <= effectiveRadius;
+
+      if (stillInside && minutesSinceLast < _duplicateLogGuardMinutes) {
+        setState(() {
+          _sessionLoggedAddresses.add(site.address);
+          _pendingSite = null;
+          _promptCountdown = 0;
+          _status =
+              'Skipped duplicate log for ${site.address} (recent log already recorded).';
+        });
+        unawaited(_cancelLogReminderNotification());
+        unawaited(_saveTrackingRuntimeState());
+        return;
+      }
+    }
+
     final String cleanNotes = notes.trim();
 
     _state.addLog(
@@ -1905,7 +1940,7 @@ class _ScenarioPageState extends State<ScenarioPage>
         confidence: _confidenceScore(fix, site),
         confirmedByUser: confirmedByUser,
         autoLogged: autoLogged,
-        timestamp: DateTime.now(),
+        timestamp: now,
       ),
     );
 
@@ -1920,6 +1955,36 @@ class _ScenarioPageState extends State<ScenarioPage>
     });
     unawaited(_cancelLogReminderNotification());
     unawaited(_saveTrackingRuntimeState());
+  }
+
+  Future<void> _confirmAndDebugRetriggerCurrentSite() async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Confirm Retrigger'),
+          content: const Text(
+            'Retrigger Now clears current dwell progress for the nearest site and allows logging again. Continue?',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Retrigger'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    _debugRetriggerCurrentSite();
   }
 
   void _debugRetriggerCurrentSite() {
@@ -2936,7 +3001,9 @@ class _ScenarioPageState extends State<ScenarioPage>
       rawGpsDebugSummary: _rawGpsDebugSummary(),
       trackingRuntimeStateDebugSummary: _trackingRuntimeStateDebugSummary(),
       locationTrackingStatesDebugSummary: _locationTrackingStatesDebugSummary(),
-      onRetriggerCurrentSite: _debugRetriggerCurrentSite,
+      onRetriggerCurrentSite: () {
+        unawaited(_confirmAndDebugRetriggerCurrentSite());
+      },
       isLoadingBatteryUsage: _isLoadingBatteryUsage,
       onRefreshBatteryUsage: _loadBatteryUsage,
       onOpenUsageAccessSettings: _openUsageAccessSettings,
