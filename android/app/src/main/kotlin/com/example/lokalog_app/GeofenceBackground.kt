@@ -1,11 +1,16 @@
 package com.lokalog_app
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingEvent
@@ -18,6 +23,9 @@ private const val STORE_NAME = "lokalog_store"
 private const val SITES_KEY = "saved_job_sites_v1"
 private const val BACKGROUND_LOGS_KEY = "background_logs_v1"
 private const val GEOFENCE_RADIUS_METERS = 100f
+private const val BACKGROUND_LOG_CHANNEL_ID = "lokalog_background_log_channel"
+private const val BACKGROUND_LOG_CHANNEL_NAME = "Background logging"
+private const val BACKGROUND_LOG_NOTIFICATION_BASE_ID = 8400
 
 object GeofenceBackground {
     fun syncGeofences(context: Context) {
@@ -112,6 +120,48 @@ object GeofenceBackground {
         prefs.edit().putString(BACKGROUND_LOGS_KEY, current.toString()).apply()
     }
 
+    fun showBackgroundLogNotification(context: Context, site: SavedSite) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                return
+            }
+        }
+
+        ensureBackgroundLogNotificationChannel(context)
+
+        val launchIntent =
+            context.packageManager.getLaunchIntentForPackage(context.packageName)
+        val contentIntent = launchIntent?.let {
+            PendingIntent.getActivity(
+                context,
+                2001,
+                it,
+                PendingIntent.FLAG_UPDATE_CURRENT or immutablePendingIntentFlag()
+            )
+        }
+
+        val message = "Logged ${site.name} from background geofence."
+        val builder = NotificationCompat.Builder(context, BACKGROUND_LOG_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("LokaLog background log")
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText("$message\n${site.address}"))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+
+        if (contentIntent != null) {
+            builder.setContentIntent(contentIntent)
+        }
+
+        val notificationId = BACKGROUND_LOG_NOTIFICATION_BASE_ID +
+            (System.currentTimeMillis() % 1000).toInt()
+        NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+    }
+
     fun findSiteById(context: Context, id: String): SavedSite? {
         return loadSites(context).firstOrNull { it.id == id }
     }
@@ -141,6 +191,36 @@ object GeofenceBackground {
             0
         }
     }
+
+    private fun immutablePendingIntentFlag(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_IMMUTABLE
+        } else {
+            0
+        }
+    }
+
+    private fun ensureBackgroundLogNotificationChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return
+        }
+
+        val manager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val existing = manager.getNotificationChannel(BACKGROUND_LOG_CHANNEL_ID)
+        if (existing != null) {
+            return
+        }
+
+        val channel = NotificationChannel(
+            BACKGROUND_LOG_CHANNEL_ID,
+            BACKGROUND_LOG_CHANNEL_NAME,
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Notifications when a location is logged in the background."
+        }
+        manager.createNotificationChannel(channel)
+    }
 }
 
 class GeofenceBroadcastReceiver : BroadcastReceiver() {
@@ -158,6 +238,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         geofences.forEach { geofence ->
             val site = GeofenceBackground.findSiteById(context, geofence.requestId) ?: return@forEach
             GeofenceBackground.appendBackgroundLog(context, site)
+            GeofenceBackground.showBackgroundLogNotification(context, site)
         }
     }
 }
