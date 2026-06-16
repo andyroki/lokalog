@@ -1,0 +1,46 @@
+<svg width="1080" height="2340" viewBox="0 0 1080 2340" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1080" height="2340" rx="90" fill="#0E1511"/>
+  <rect x="34" y="34" width="1012" height="2272" rx="70" fill="#F7F5EE"/>
+  <text x="90" y="190" font-size="54" font-family="Arial, sans-serif" font-weight="700" fill="#302717">Settings</text>
+
+  <rect x="70" y="240" width="940" height="170" rx="24" fill="#FFFFFF" stroke="#E0D8C6"/>
+  <text x="100" y="305" font-size="36" font-family="Arial, sans-serif" fill="#3F3323">Tracking</text>
+  <text x="100" y="355" font-size="28" font-family="Arial, sans-serif" fill="#7A6A54">Current polling: 30s close / 5m far</text>
+  <rect x="820" y="285" width="150" height="70" rx="35" fill="#1F7A4B"/>
+  <circle cx="930" cy="320" r="26" fill="white"/>
+
+  <rect x="70" y="432" width="940" height="200" rx="24" fill="#FFFFFF" stroke="#E0D8C6"/>
+  <text x="100" y="498" font-size="36" font-family="Arial, sans-serif" fill="#3F3323">Font size</text>
+  <text x="100" y="548" font-size="28" font-family="Arial, sans-serif" fill="#7A6A54">Current: 1.20x (max 1.5x)</text>
+  <rect x="100" y="575" width="840" height="10" rx="5" fill="#E2D8C7"/>
+  <rect x="100" y="575" width="510" height="10" rx="5" fill="#1F7A4B"/>
+
+  <rect x="70" y="654" width="940" height="220" rx="24" fill="#FFFFFF" stroke="#E0D8C6"/>
+  <text x="100" y="720" font-size="36" font-family="Arial, sans-serif" fill="#3F3323">Background permissions</text>
+  <text x="100" y="770" font-size="28" font-family="Arial, sans-serif" fill="#1F7A4B">Location: Allow all the time</text>
+  <text x="100" y="814" font-size="28" font-family="Arial, sans-serif" fill="#B67A13">Notifications: Check device setting</text>
+
+  <rect x="70" y="896" width="940" height="310" rx="24" fill="#FFFFFF" stroke="#E0D8C6"/>
+  <text x="100" y="962" font-size="36" font-family="Arial, sans-serif" fill="#3F3323">Polling behavior</text>
+  <text x="100" y="1012" font-size="28" font-family="Arial, sans-serif" fill="#7A6A54">Close interval: 30 sec</text>
+  <text x="100" y="1054" font-size="28" font-family="Arial, sans-serif" fill="#7A6A54">Far interval: 5 min</text>
+  <text x="100" y="1096" font-size="28" font-family="Arial, sans-serif" fill="#7A6A54">Far distance: 3000 m</text>
+  <text x="100" y="1138" font-size="28" font-family="Arial, sans-serif" fill="#7A6A54">Retrigger after out-geofence: 20 min</text>
+
+  <rect x="70" y="1228" width="940" height="220" rx="24" fill="#FFFFFF" stroke="#E0D8C6"/>
+  <text x="100" y="1294" font-size="36" font-family="Arial, sans-serif" fill="#3F3323">Debug mode</text>
+  <text x="100" y="1344" font-size="28" font-family="Arial, sans-serif" fill="#7A6A54">Use for startup/logging diagnostics</text>
+  <rect x="820" y="1280" width="150" height="70" rx="35" fill="#1F7A4B"/>
+  <circle cx="930" cy="1315" r="26" fill="white"/>
+
+  <rect x="70" y="1470" width="940" height="260" rx="24" fill="#FFFFFF" stroke="#E0D8C6"/>
+  <text x="100" y="1536" font-size="36" font-family="Arial, sans-serif" fill="#3F3323">Location limit unlock</text>
+  <rect x="100" y="1574" width="620" height="78" rx="14" fill="#FAF7F0" stroke="#DED5C3"/>
+  <text x="126" y="1624" font-size="30" font-family="Arial, sans-serif" fill="#8B7B66">Enter unlock code</text>
+  <rect x="740" y="1574" width="240" height="78" rx="39" fill="#1F7A4B"/>
+  <text x="815" y="1624" font-size="31" font-family="Arial, sans-serif" font-weight="700" fill="#FFFFFF">Unlock</text>
+
+  <rect x="70" y="1760" width="940" height="460" rx="40" fill="#2E2518"/>
+  <text x="110" y="1842" font-size="48" font-family="Arial, sans-serif" font-weight="700" fill="#FFFFFF">LokaLog</text>
+  <text x="110" y="1898" font-size="31" font-family="Arial, sans-serif" fill="#FFEACC">Configurable for real-world routes and teams</text>
+</svg>

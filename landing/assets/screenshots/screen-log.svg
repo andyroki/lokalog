@@ -1,0 +1,53 @@
+<svg width="1080" height="2340" viewBox="0 0 1080 2340" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1080" y2="2340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EEF6F0"/>
+      <stop offset="1" stop-color="#DCEADB"/>
+    </linearGradient>
+  </defs>
+  <rect width="1080" height="2340" rx="90" fill="#0E1511"/>
+  <rect x="34" y="34" width="1012" height="2272" rx="70" fill="url(#bg)"/>
+  <rect x="130" y="90" width="820" height="42" rx="21" fill="#0E1511" fill-opacity="0.15"/>
+  <text x="90" y="190" font-size="54" font-family="Arial, sans-serif" font-weight="700" fill="#123A25">Location Log</text>
+
+  <rect x="70" y="240" width="940" height="210" rx="28" fill="#FFFFFF" stroke="#C9DCCC"/>
+  <text x="100" y="305" font-size="34" font-family="Arial, sans-serif" fill="#2E5440">Nearest site</text>
+  <text x="100" y="360" font-size="44" font-family="Arial, sans-serif" font-weight="700" fill="#156B42">Maple Corner Lot</text>
+  <text x="100" y="410" font-size="30" font-family="Arial, sans-serif" fill="#4B6A57">Countdown to log: 1.8 min</text>
+
+  <rect x="70" y="478" width="940" height="220" rx="28" fill="#FFFFFF" stroke="#C9DCCC"/>
+  <text x="100" y="545" font-size="34" font-family="Arial, sans-serif" fill="#2E5440">Geofence timing</text>
+  <text x="100" y="600" font-size="32" font-family="Arial, sans-serif" fill="#3E6250">Time in geofence</text>
+  <text x="450" y="600" font-size="42" font-family="Arial, sans-serif" font-weight="700" fill="#0F6B41">3.2m</text>
+  <text x="100" y="653" font-size="32" font-family="Arial, sans-serif" fill="#3E6250">Time out geofence</text>
+  <text x="480" y="653" font-size="42" font-family="Arial, sans-serif" font-weight="700" fill="#B57B13">0.4m</text>
+
+  <rect x="70" y="730" width="940" height="460" rx="28" fill="#FFFFFF" stroke="#C9DCCC"/>
+  <text x="100" y="795" font-size="34" font-family="Arial, sans-serif" fill="#2E5440">Locations log</text>
+
+  <rect x="100" y="835" width="880" height="145" rx="20" fill="#F6FBF7" stroke="#D4E3D6"/>
+  <text x="128" y="885" font-size="30" font-family="Arial, sans-serif" fill="#2C513E">Customer: Green Valley HOA</text>
+  <text x="128" y="930" font-size="24" font-family="Arial, sans-serif" fill="#607A69">In geofence 3.2m • Out geofence 0.0m</text>
+  <text x="128" y="965" font-size="24" font-family="Arial, sans-serif" fill="#607A69">Confidence 96.1% • auto-logged</text>
+
+  <rect x="100" y="995" width="880" height="145" rx="20" fill="#F6FBF7" stroke="#D4E3D6"/>
+  <text x="128" y="1045" font-size="30" font-family="Arial, sans-serif" fill="#2C513E">Customer: Oak Family Home</text>
+  <text x="128" y="1090" font-size="24" font-family="Arial, sans-serif" fill="#607A69">In geofence 6.9m • Out geofence 0.0m</text>
+  <text x="128" y="1125" font-size="24" font-family="Arial, sans-serif" fill="#607A69">Confidence 98.2% • confirmed</text>
+
+  <rect x="70" y="1220" width="940" height="220" rx="28" fill="#FFFFFF" stroke="#C9DCCC"/>
+  <text x="100" y="1285" font-size="34" font-family="Arial, sans-serif" fill="#2E5440">Background status</text>
+  <text x="100" y="1340" font-size="30" font-family="Arial, sans-serif" fill="#4B6A57">Background geofence: enabled</text>
+  <text x="100" y="1388" font-size="30" font-family="Arial, sans-serif" fill="#4B6A57">Last geofence event: 2 min ago</text>
+
+  <rect x="70" y="1468" width="940" height="300" rx="28" fill="#FFFFFF" stroke="#C9DCCC"/>
+  <text x="100" y="1535" font-size="34" font-family="Arial, sans-serif" fill="#2E5440">Quick actions</text>
+  <rect x="100" y="1578" width="400" height="82" rx="41" fill="#1F7A4B"/>
+  <text x="210" y="1632" font-size="34" font-family="Arial, sans-serif" font-weight="700" fill="#FFFFFF">Share All</text>
+  <rect x="530" y="1578" width="450" height="82" rx="41" fill="#FFFFFF" stroke="#C9DCCC"/>
+  <text x="650" y="1632" font-size="34" font-family="Arial, sans-serif" font-weight="700" fill="#2D513E">Open Debug</text>
+
+  <rect x="70" y="1796" width="940" height="450" rx="40" fill="#0F6A41"/>
+  <text x="110" y="1878" font-size="48" font-family="Arial, sans-serif" font-weight="700" fill="#FFFFFF">LokaLog</text>
+  <text x="110" y="1935" font-size="31" font-family="Arial, sans-serif" fill="#D5F5E1">Smarter location logging for field teams</text>
+</svg>

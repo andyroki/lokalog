@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LokaLog - Smarter Location Logging</title>
+  <meta
+    name="description"
+    content="LokaLog helps field teams log site visits automatically with geofence-aware tracking, dwell timing, and reliable background logging."
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    :root {
+      --bg: #f3f5f2;
+      --ink: #122016;
+      --muted: #4b5a4f;
+      --brand: #1f7a4b;
+      --brand-strong: #155f39;
+      --card: #ffffff;
+      --line: #d8e1d9;
+      --accent: #f0b23f;
+      --radius-lg: 24px;
+      --radius-md: 16px;
+      --shadow: 0 12px 36px rgba(10, 25, 14, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", sans-serif;
+      background:
+        radial-gradient(800px 500px at 85% -100px, rgba(31, 122, 75, 0.22), transparent 70%),
+        radial-gradient(900px 480px at -10% 18%, rgba(240, 178, 63, 0.18), transparent 65%),
+        var(--bg);
+      color: var(--ink);
+      line-height: 1.5;
+    }
+
+    .wrap {
+      width: min(1100px, 92vw);
+      margin: 0 auto;
+    }
+
+    .badge,
+    .mono {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.78rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    header {
+      padding: 24px 0;
+      position: sticky;
+      top: 0;
+      backdrop-filter: blur(8px);
+      background: rgba(243, 245, 242, 0.85);
+      border-bottom: 1px solid rgba(216, 225, 217, 0.7);
+      z-index: 10;
+    }
+
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      color: inherit;
+      font-weight: 700;
+      font-size: 1.05rem;
+    }
+
+    .logo-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 6px rgba(31, 122, 75, 0.16);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 26px;
+      padding: 56px 0 30px;
+      align-items: stretch;
+    }
+
+    .hero-copy {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow);
+      padding: 28px;
+      animation: rise 520ms ease both;
+    }
+
+    .hero h1 {
+      margin: 12px 0;
+      font-size: clamp(2rem, 4.4vw, 3.2rem);
+      line-height: 1.06;
+      letter-spacing: -0.02em;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      font-size: clamp(1.02rem, 2.2vw, 1.15rem);
+      max-width: 58ch;
+    }
+
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 26px;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(140deg, var(--brand), var(--brand-strong));
+      color: #fff;
+      box-shadow: 0 12px 22px rgba(25, 80, 49, 0.25);
+    }
+
+    .btn-secondary {
+      background: #fff;
+      color: var(--ink);
+      border-color: var(--line);
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+    }
+
+    .phone {
+      border-radius: 34px;
+      border: 1px solid #1a231d;
+      background: #121a14;
+      padding: 12px;
+      box-shadow: 0 26px 42px rgba(7, 15, 9, 0.36);
+      animation: rise 620ms ease both;
+      animation-delay: 70ms;
+    }
+
+    .screen {
+      background: linear-gradient(165deg, #f6faf6, #e6efe7);
+      border-radius: 22px;
+      padding: 14px;
+      min-height: 420px;
+      overflow: hidden;
+    }
+
+    .log-preview {
+      background: #fbfdfb;
+      border: 1px solid #d6ded8;
+      border-radius: 16px;
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+    }
+
+    .log-preview-header {
+      background: linear-gradient(140deg, #1f7a4b, #145f39);
+      color: #fff;
+      padding: 11px 12px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      letter-spacing: 0.01em;
+    }
+
+    .log-shell {
+      padding: 10px;
+      display: grid;
+      gap: 9px;
+      align-content: start;
+      background: #f5f9f5;
+    }
+
+    .preview-card {
+      background: #fff;
+      border: 1px solid #d9e4da;
+      border-radius: 10px;
+      padding: 8px 9px;
+      color: #2f4435;
+      font-size: 0.76rem;
+      line-height: 1.35;
+    }
+
+    .preview-card strong {
+      color: #15261a;
+    }
+
+    .preview-card.highlight {
+      background: #d9f0e0;
+      border-color: #b8dcc4;
+      color: #1a3926;
+      font-weight: 600;
+    }
+
+    .log-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 2px 2px 0;
+    }
+
+    .log-toolbar-title {
+      font-size: 0.86rem;
+      font-weight: 700;
+      color: #172b1d;
+    }
+
+    .toolbar-btn {
+      border: 1px solid #cfe0d3;
+      background: #fff;
+      color: #1e4e32;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+
+    .log-entry {
+      background: #fff;
+      border: 1px solid #d9e4da;
+      border-radius: 10px;
+      padding: 8px;
+      display: grid;
+      gap: 5px;
+      box-shadow: 0 3px 10px rgba(10, 25, 14, 0.05);
+    }
+
+    .log-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 5px;
+    }
+
+    .action-btn {
+      border: 1px solid #d5dfd8;
+      background: #f8fbf8;
+      color: #355343;
+      border-radius: 999px;
+      padding: 2px 6px;
+      font-size: 0.62rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+
+    .log-customer {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #132218;
+    }
+
+    .log-detail {
+      font-size: 0.7rem;
+      color: #3f5345;
+      line-height: 1.35;
+    }
+
+    .log-detail strong {
+      font-weight: 700;
+    }
+
+    .log-preview-footer {
+      padding: 9px 12px;
+      border-top: 1px solid #e1e8e2;
+      color: #4a5d4f;
+      font-size: 0.76rem;
+      background: #f6faf7;
+    }
+
+    .screen img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 16px;
+    }
+
+    section {
+      padding: 22px 0;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .feature {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      padding: 18px;
+      box-shadow: 0 6px 18px rgba(10, 25, 14, 0.07);
+      animation: rise 520ms ease both;
+    }
+
+    .feature h3 {
+      margin: 8px 0 6px;
+      font-size: 1.08rem;
+    }
+
+    .feature p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.96rem;
+    }
+
+    .flow {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      box-shadow: 0 6px 18px rgba(10, 25, 14, 0.07);
+    }
+
+    .flow ol {
+      margin: 12px 0 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 7px;
+      color: var(--muted);
+    }
+
+    .strip {
+      margin: 18px 0 8px;
+      background: linear-gradient(95deg, #1f7a4b, #145f39);
+      color: #fff;
+      border-radius: var(--radius-md);
+      padding: 18px;
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .strip p {
+      margin: 0;
+      max-width: 64ch;
+      opacity: 0.95;
+    }
+
+    footer {
+      padding: 28px 0 36px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @keyframes rise {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @media (max-width: 920px) {
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .grid-3 {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .phone {
+        max-width: 460px;
+      }
+
+    }
+
+    @media (max-width: 640px) {
+      header {
+        position: static;
+      }
+
+      .hero {
+        padding-top: 26px;
+      }
+
+      .hero-copy,
+      .phone {
+        border-radius: 18px;
+      }
+
+      .grid-3 {
+        grid-template-columns: 1fr;
+      }
+
+      .cta-row {
+        width: 100%;
+      }
+
+      .btn {
+        width: 100%;
+        text-align: center;
+      }
+
+      .screen {
+        min-height: 360px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <nav>
+        <a class="logo" href="#top">
+          <span class="logo-dot" aria-hidden="true"></span>
+          <span>LokaLog</span>
+        </a>
+        <span class="mono">Single-page showcase</span>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top" class="wrap">
+    <section class="hero">
+      <article class="hero-copy">
+        <span class="badge">Field Logging, Simplified</span>
+        <h1>Built for people who need to know where they have been, even when memory says, "No idea."</h1>
+        <p>
+          LokaLog tracks only the locations you add, so you can quickly confirm whether you were there yesterday,
+          last week, or 43 days ago. Add notes to each visit and save entries to your calendar when needed.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#features">See Features</a>
+          <a class="btn btn-secondary" href="#how">How It Works</a>
+        </div>
+      </article>
+
+      <aside class="phone" aria-label="App preview mockup">
+        <div class="screen">
+          <div class="log-preview" aria-label="LokaLog log screen sample">
+            <div class="log-preview-header">Location Log</div>
+            <div class="log-shell">
+              <div class="preview-card">
+                Tracking active. Closest saved location is inside geofence and building dwell time.
+              </div>
+              <div class="preview-card">
+                <strong>Current GPS:</strong> 33.84672, -84.36155<br />
+                Accuracy: 8.1 m | Speed: 0.3 m/s
+              </div>
+              <div class="preview-card highlight">
+                Nearest: Maple Street Property | distance: 18 m | time in geofence: 19.8 min | remaining: 0.2 min
+              </div>
+              <div class="log-toolbar">
+                <div class="log-toolbar-title">Locations Log</div>
+                <div class="toolbar-btn">Share All</div>
+              </div>
+              <article class="log-entry">
+                <div class="log-actions">
+                  <span class="action-btn">Share</span>
+                  <span class="action-btn">Calendar</span>
+                  <span class="action-btn">Edit</span>
+                  <span class="action-btn">Delete</span>
+                </div>
+                <div class="log-customer">Customer: Maple Street Property</div>
+                <div class="log-detail">14 Maple Street, Marietta, GA</div>
+                <div class="log-detail">Jun 16, 2026 at 09:14 AM</div>
+                <div class="log-detail">Confidence: 96.4% | confirmed</div>
+                <div class="log-detail">Time in geofence: 22.1m | Time out geofence: 3.4m</div>
+                <div class="log-detail"><strong>Notes:</strong> Mowed front lawn and trimmed edges.</div>
+              </article>
+              <article class="log-entry">
+                <div class="log-actions">
+                  <span class="action-btn">Share</span>
+                  <span class="action-btn">Calendar</span>
+                  <span class="action-btn">Edit</span>
+                  <span class="action-btn">Delete</span>
+                </div>
+                <div class="log-customer">Customer: Riverside Office</div>
+                <div class="log-detail">22 River Road, Roswell, GA</div>
+                <div class="log-detail">Jun 15, 2026 at 02:36 PM</div>
+                <div class="log-detail">Confidence: 88.7% | auto-logged</div>
+                <div class="log-detail">Time in geofence: 20.0m | Time out geofence: 11.2m</div>
+                <div class="log-detail"><strong>Notes:</strong> Checked irrigation valves and tested zones.</div>
+              </article>
+            </div>
+            <div class="log-preview-footer">Only saved locations are tracked.</div>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section id="features">
+      <div class="grid-3">
+        <article class="feature" style="animation-delay: 40ms;">
+          <span class="badge">01</span>
+          <h3>Automatic Visit Logging</h3>
+          <p>
+            LokaLog automatically records visits to your predefined locations, so your history stays accurate without manual check-ins.
+          </p>
+        </article>
+        <article class="feature" style="animation-delay: 90ms;">
+          <span class="badge">02</span>
+          <h3>Easy Sharing and Follow-Up</h3>
+          <p>
+            Share logs in seconds, add notes, and send entries to your calendar so updates are ready when clients or teams need them.
+          </p>
+        </article>
+        <article class="feature" style="animation-delay: 140ms;">
+          <span class="badge">03</span>
+          <h3>Never Guess Where You Have Been</h3>
+          <p>
+            Quickly confirm whether you visited a location yesterday, last week, or weeks ago, with a timeline you can trust.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section id="how" class="flow">
+      <span class="badge">How It Works</span>
+      <ol>
+        <li>Add the addresses you want to track.</li>
+        <li>Start tracking and go about your day.</li>
+        <li>That is it. LokaLog will log visits when it confirms you were there.</li>
+        <li>Feel free to adjust settings anytime to match your workflow.</li>
+      </ol>
+    </section>
+
+    <section>
+      <div class="strip">
+        <div>
+          <strong>Your memory takes days off. LokaLog does not.</strong>
+          <p>
+            Keep your operation lightweight while still seeing when, where, and why a log was created.
+          </p>
+        </div>
+        <a class="btn btn-secondary" href="#top">Back to top</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      LokaLog app showcase page. Edit this file to plug in your store links and branding.
+    </div>
+  </footer>
+</body>
+</html>
