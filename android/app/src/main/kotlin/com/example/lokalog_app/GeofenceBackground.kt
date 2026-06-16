@@ -21,12 +21,17 @@ private const val GEOFENCE_RADIUS_METERS = 100f
 
 object GeofenceBackground {
     fun syncGeofences(context: Context) {
+        val client = LocationServices.getGeofencingClient(context)
+        val pendingIntent = geofencePendingIntent(context)
+
         if (!hasBackgroundLocationPermission(context)) {
+            client.removeGeofences(pendingIntent)
             return
         }
 
         val sites = loadSites(context)
         if (sites.isEmpty()) {
+            client.removeGeofences(pendingIntent)
             return
         }
 
@@ -34,20 +39,25 @@ object GeofenceBackground {
             Geofence.Builder()
                 .setRequestId(site.id)
                 .setCircularRegion(site.lat, site.lng, GEOFENCE_RADIUS_METERS)
-                .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_DWELL)
+                .setTransitionTypes(
+                    Geofence.GEOFENCE_TRANSITION_ENTER or
+                        Geofence.GEOFENCE_TRANSITION_DWELL
+                )
                 .setLoiteringDelay((site.requiredDwellMinutes * 60_000).coerceAtLeast(60_000))
                 .setExpirationDuration(Geofence.NEVER_EXPIRE)
                 .build()
         }
 
         val request = GeofencingRequest.Builder()
-            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+            .setInitialTrigger(
+                GeofencingRequest.INITIAL_TRIGGER_ENTER or
+                    GeofencingRequest.INITIAL_TRIGGER_DWELL
+            )
             .addGeofences(geofences)
             .build()
 
-        val client = LocationServices.getGeofencingClient(context)
-        client.removeGeofences(geofencePendingIntent(context)).addOnCompleteListener {
-            client.addGeofences(request, geofencePendingIntent(context))
+        client.removeGeofences(pendingIntent).addOnCompleteListener {
+            client.addGeofences(request, pendingIntent)
         }
     }
 

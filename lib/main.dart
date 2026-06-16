@@ -331,6 +331,17 @@ class _ScenarioPageState extends State<ScenarioPage>
     setState(() {
       _backgroundLocationPermissionGranted = granted;
     });
+    if (granted) {
+      await _syncBackgroundGeofences();
+    }
+  }
+
+  Future<void> _syncBackgroundGeofences() async {
+    try {
+      await LocationPermissionService.syncBackgroundGeofences(_locationChannel);
+    } catch (_) {
+      // Keep app flow even if native geofence sync fails.
+    }
   }
 
   void _initializeAppVersionLabel() {
@@ -1513,6 +1524,8 @@ class _ScenarioPageState extends State<ScenarioPage>
       }
       return false;
     }
+
+    await _syncBackgroundGeofences();
 
     return true;
   }

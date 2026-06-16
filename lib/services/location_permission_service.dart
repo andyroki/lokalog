@@ -23,6 +23,10 @@ class LocationPermissionService {
         false;
   }
 
+  static Future<void> syncBackgroundGeofences(MethodChannel channel) async {
+    await channel.invokeMethod<void>('syncBackgroundGeofences');
+  }
+
   static Future<bool> openLocationSettings(MethodChannel channel) async {
     return (await channel.invokeMethod<bool>('openLocationSettings')) ?? false;
   }

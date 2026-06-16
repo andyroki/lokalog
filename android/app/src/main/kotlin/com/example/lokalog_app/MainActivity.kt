@@ -120,6 +120,11 @@ class MainActivity : FlutterActivity() {
 						result.success(GeofenceBackground.hasBackgroundLocationPermission(this))
 					}
 
+					"syncBackgroundGeofences" -> {
+						GeofenceBackground.syncGeofences(this)
+						result.success(true)
+					}
+
 					"openLocationSettings" -> {
 						openLocationSettings(result)
 					}
