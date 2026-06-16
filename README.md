@@ -88,3 +88,7 @@ Upload only the `.aab` file to Play Console. If Play reports version conflicts, 
 
 Use this for release change build number/
 flutter build appbundle --release --build-name 1.0.1 --build-number 20 
+
+
+website at
+C:\Users\user\projects\lokalog\landing
