@@ -105,6 +105,10 @@ class MainActivity : FlutterActivity() {
 						result.success(GeofenceBackground.loadBackgroundLogsJson(this))
 					}
 
+					"loadBackgroundOutOfGeofenceSince" -> {
+						result.success(GeofenceBackground.loadBackgroundOutOfGeofenceSinceJson(this))
+					}
+
 					"deleteBackgroundLog" -> {
 						val address = call.argument<String>("address")
 						val timestamp = call.argument<Number>("timestamp")?.toLong()

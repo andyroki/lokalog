@@ -22,6 +22,7 @@ import org.json.JSONObject
 private const val STORE_NAME = "lokalog_store"
 private const val SITES_KEY = "saved_job_sites_v1"
 private const val BACKGROUND_LOGS_KEY = "background_logs_v1"
+private const val BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY = "background_out_of_geofence_since_v1"
 private const val GEOFENCE_RADIUS_METERS = 100f
 private const val BACKGROUND_LOG_CHANNEL_ID = "lokalog_background_log_channel"
 private const val BACKGROUND_LOG_CHANNEL_NAME = "Background logging"
@@ -49,7 +50,8 @@ object GeofenceBackground {
                 .setCircularRegion(site.lat, site.lng, GEOFENCE_RADIUS_METERS)
                 .setTransitionTypes(
                     Geofence.GEOFENCE_TRANSITION_ENTER or
-                        Geofence.GEOFENCE_TRANSITION_DWELL
+                        Geofence.GEOFENCE_TRANSITION_DWELL or
+                        Geofence.GEOFENCE_TRANSITION_EXIT
                 )
                 .setLoiteringDelay((site.requiredDwellMinutes * 60_000).coerceAtLeast(60_000))
                 .setExpirationDuration(Geofence.NEVER_EXPIRE)
@@ -72,6 +74,11 @@ object GeofenceBackground {
     fun loadBackgroundLogsJson(context: Context): String {
         val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
         return prefs.getString(BACKGROUND_LOGS_KEY, "[]") ?: "[]"
+    }
+
+    fun loadBackgroundOutOfGeofenceSinceJson(context: Context): String {
+        val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY, "{}") ?: "{}"
     }
 
     fun deleteBackgroundLog(context: Context, address: String, timestamp: Long) {
@@ -118,6 +125,24 @@ object GeofenceBackground {
         }
         current.put(entry)
         prefs.edit().putString(BACKGROUND_LOGS_KEY, current.toString()).apply()
+    }
+
+    fun markBackgroundOutOfGeofenceSince(context: Context, site: SavedSite, nowMillis: Long) {
+        val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+        val current = JSONObject(
+            prefs.getString(BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY, "{}") ?: "{}"
+        )
+        current.put(site.address, nowMillis)
+        prefs.edit().putString(BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY, current.toString()).apply()
+    }
+
+    fun clearBackgroundOutOfGeofenceSince(context: Context, site: SavedSite) {
+        val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+        val current = JSONObject(
+            prefs.getString(BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY, "{}") ?: "{}"
+        )
+        current.remove(site.address)
+        prefs.edit().putString(BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY, current.toString()).apply()
     }
 
     fun showBackgroundLogNotification(context: Context, site: SavedSite) {
@@ -230,15 +255,27 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             return
         }
 
-        if (event.geofenceTransition != Geofence.GEOFENCE_TRANSITION_DWELL) {
-            return
-        }
-
         val geofences = event.triggeringGeofences ?: return
+        val transition = event.geofenceTransition
+        val nowMillis = System.currentTimeMillis()
         geofences.forEach { geofence ->
             val site = GeofenceBackground.findSiteById(context, geofence.requestId) ?: return@forEach
-            GeofenceBackground.appendBackgroundLog(context, site)
-            GeofenceBackground.showBackgroundLogNotification(context, site)
+
+            if (transition == Geofence.GEOFENCE_TRANSITION_EXIT) {
+                GeofenceBackground.markBackgroundOutOfGeofenceSince(context, site, nowMillis)
+                return@forEach
+            }
+
+            if (transition == Geofence.GEOFENCE_TRANSITION_ENTER) {
+                GeofenceBackground.clearBackgroundOutOfGeofenceSince(context, site)
+                return@forEach
+            }
+
+            if (transition == Geofence.GEOFENCE_TRANSITION_DWELL) {
+                GeofenceBackground.clearBackgroundOutOfGeofenceSince(context, site)
+                GeofenceBackground.appendBackgroundLog(context, site)
+                GeofenceBackground.showBackgroundLogNotification(context, site)
+            }
         }
     }
 }

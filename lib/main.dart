@@ -311,6 +311,11 @@ class _ScenarioPageState extends State<ScenarioPage>
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       unawaited(_saveTrackingRuntimeState());
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_loadBackgroundLogs());
     }
   }
 
@@ -1257,6 +1262,7 @@ class _ScenarioPageState extends State<ScenarioPage>
     try {
       await _ensureDeletedLogKeysLoaded();
       await _ensureCalendarAddedLogKeysLoaded();
+      await _loadBackgroundOutOfGeofenceSince();
 
       final String? raw =
           await _locationChannel.invokeMethod<String>('loadBackgroundLogs');
@@ -1313,6 +1319,51 @@ class _ScenarioPageState extends State<ScenarioPage>
       });
     } catch (_) {
       // Ignore background log load errors; they are not fatal.
+    }
+  }
+
+  Future<void> _loadBackgroundOutOfGeofenceSince() async {
+    try {
+      final String? raw = await _locationChannel.invokeMethod<String>(
+        'loadBackgroundOutOfGeofenceSince',
+      );
+      if (raw == null || raw.trim().isEmpty) {
+        return;
+      }
+
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        return;
+      }
+
+      final Map<String, DateTime> parsed = <String, DateTime>{};
+      decoded.forEach((String address, dynamic value) {
+        final int? timestampMillis = (value as num?)?.toInt();
+        if (timestampMillis != null && timestampMillis > 0) {
+          parsed[address] =
+              DateTime.fromMillisecondsSinceEpoch(timestampMillis);
+        }
+      });
+
+      final Set<String> siteAddresses =
+          _sites.map((JobSite site) => site.address).toSet();
+
+      if (!mounted) {
+        _outOfGeofenceSince.removeWhere(
+          (String address, DateTime _) => siteAddresses.contains(address),
+        );
+        _outOfGeofenceSince.addAll(parsed);
+        return;
+      }
+
+      setState(() {
+        _outOfGeofenceSince.removeWhere(
+          (String address, DateTime _) => siteAddresses.contains(address),
+        );
+        _outOfGeofenceSince.addAll(parsed);
+      });
+    } catch (_) {
+      // Keep best-effort behavior if native background timing is unavailable.
     }
   }
 
