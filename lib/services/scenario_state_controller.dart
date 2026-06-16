@@ -4,6 +4,7 @@ class ScenarioStateController {
   final List<JobSite> sites = <JobSite>[];
   final List<JobLog> logs = <JobLog>[];
   final Set<String> deletedLogKeys = <String>{};
+  final Set<String> calendarAddedLogKeys = <String>{};
   final Set<String> sessionLoggedAddresses = <String>{};
   final Map<String, double> timeInGeofenceMinutes = <String, double>{};
   final Map<String, DateTime> outOfGeofenceSince = <String, DateTime>{};
@@ -49,6 +50,14 @@ class ScenarioStateController {
 
   void addDeletedLogKey(String key) {
     deletedLogKeys.add(key);
+  }
+
+  void addCalendarAddedLogKey(String key) {
+    calendarAddedLogKeys.add(key);
+  }
+
+  void removeCalendarAddedLogKey(String key) {
+    calendarAddedLogKeys.remove(key);
   }
 
   void removeLogAt(int index) {

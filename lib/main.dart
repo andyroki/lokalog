@@ -222,9 +222,12 @@ class _ScenarioPageState extends State<ScenarioPage>
   static const String _sitesStorageKey = 'saved_job_sites_v1';
   static const String _deletedLogKeysPreferenceKey =
       'deleted_background_log_keys_v1';
+  static const String _calendarAddedLogKeysPreferenceKey =
+      'calendar_added_log_keys_v1';
 
   final ScenarioStateController _state = ScenarioStateController();
   bool _deletedLogKeysLoaded = false;
+  bool _calendarAddedLogKeysLoaded = false;
   bool _autoStartTrackingAttempted = false;
   bool _trackingOffStartupDialogShown = false;
   bool _trackingPreferenceLoaded = false;
@@ -280,6 +283,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   List<JobSite> get _sites => _state.sites;
   List<JobLog> get _logs => _state.logs;
   Set<String> get _deletedLogKeys => _state.deletedLogKeys;
+  Set<String> get _calendarAddedLogKeys => _state.calendarAddedLogKeys;
   Set<String> get _sessionLoggedAddresses => _state.sessionLoggedAddresses;
   Map<String, double> get _timeInGeofenceMinutesBySite =>
       _state.timeInGeofenceMinutes;
@@ -1251,6 +1255,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   Future<void> _loadBackgroundLogs() async {
     try {
       await _ensureDeletedLogKeysLoaded();
+      await _ensureCalendarAddedLogKeysLoaded();
 
       final String? raw =
           await _locationChannel.invokeMethod<String>('loadBackgroundLogs');
@@ -1278,7 +1283,14 @@ class _ScenarioPageState extends State<ScenarioPage>
           confidence: ((item['confidence'] as num?)?.toDouble() ?? 100),
           confirmedByUser: (item['confirmedByUser'] as bool?) ?? false,
           autoLogged: (item['autoLogged'] as bool?) ?? true,
-          calendarAdded: (item['calendarAdded'] as bool?) ?? false,
+          calendarAdded: (item['calendarAdded'] as bool?) ??
+              false ||
+                  _calendarAddedLogKeys.contains(
+                    _logStorageKey(
+                      address: (item['address'] ?? '').toString(),
+                      timestampMillis: timestampMillis,
+                    ),
+                  ),
           timestamp: DateTime.fromMillisecondsSinceEpoch(
             timestampMillis,
           ),
@@ -1342,6 +1354,44 @@ class _ScenarioPageState extends State<ScenarioPage>
         _locationChannel,
         key: _deletedLogKeysPreferenceKey,
         value: jsonEncode(_deletedLogKeys.toList()),
+      );
+    } catch (_) {
+      // Keep local behavior if preference storage is unavailable.
+    }
+  }
+
+  Future<void> _ensureCalendarAddedLogKeysLoaded() async {
+    if (_calendarAddedLogKeysLoaded) {
+      return;
+    }
+
+    try {
+      final String? raw = await ScenarioPreferencesService.loadStringPreference(
+        _locationChannel,
+        key: _calendarAddedLogKeysPreferenceKey,
+      );
+
+      if (raw != null && raw.trim().isNotEmpty) {
+        final dynamic decoded = jsonDecode(raw);
+        if (decoded is List<dynamic>) {
+          _calendarAddedLogKeys
+            ..clear()
+            ..addAll(decoded.whereType<String>());
+        }
+      }
+    } catch (_) {
+      // Keep best-effort behavior if preference storage is unavailable.
+    }
+
+    _calendarAddedLogKeysLoaded = true;
+  }
+
+  Future<void> _saveCalendarAddedLogKeys() async {
+    try {
+      await ScenarioPreferencesService.saveStringPreference(
+        _locationChannel,
+        key: _calendarAddedLogKeysPreferenceKey,
+        value: jsonEncode(_calendarAddedLogKeys.toList()),
       );
     } catch (_) {
       // Keep local behavior if preference storage is unavailable.
@@ -2025,9 +2075,15 @@ class _ScenarioPageState extends State<ScenarioPage>
     if (!opened || !mounted) {
       return;
     }
+    final String key = _logStorageKey(
+      address: log.address,
+      timestampMillis: log.timestamp.millisecondsSinceEpoch,
+    );
     setState(() {
       _state.markLogCalendarAdded(log.address, log.timestamp);
+      _state.addCalendarAddedLogKey(key);
     });
+    unawaited(_saveCalendarAddedLogKeys());
   }
 
   Future<void> _showLogReminderNotification(JobSite site, int countdown) async {
@@ -2602,6 +2658,8 @@ class _ScenarioPageState extends State<ScenarioPage>
     );
     _state.addDeletedLogKey(deletedKey);
     unawaited(_saveDeletedLogKeys());
+    _state.removeCalendarAddedLogKey(deletedKey);
+    unawaited(_saveCalendarAddedLogKeys());
 
     setState(() {
       _state.removeLogAt(index);
