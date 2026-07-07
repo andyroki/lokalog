@@ -94,10 +94,8 @@ class TrackingController {
       // Keep dwell updated per site so debug/state reflects current geofence
       // status for all locations, not just the nearest candidate.
       if (inGeofence) {
-        if (!isLogged) {
-          timeInGeofenceMinutes[site.address] =
-              (timeInGeofenceMinutes[site.address] ?? 0) + increment;
-        }
+        timeInGeofenceMinutes[site.address] =
+            (timeInGeofenceMinutes[site.address] ?? 0) + increment;
       } else {
         timeInGeofenceMinutes[site.address] = 0;
       }

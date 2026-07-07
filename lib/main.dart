@@ -1903,9 +1903,6 @@ class _ScenarioPageState extends State<ScenarioPage>
     if (!_isTracking || _lastFixAt == null || _currentFix == null) {
       return base;
     }
-    if (_sessionLoggedAddresses.contains(site.address)) {
-      return base;
-    }
 
     final LocationFix fix = _currentFix!;
     final double distance = LocationTrackingCalculator.distanceMetersBetween(
