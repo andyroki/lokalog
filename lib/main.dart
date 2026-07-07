@@ -341,9 +341,11 @@ class _ScenarioPageState extends State<ScenarioPage>
     setState(() {
       _backgroundLocationPermissionGranted = granted;
     });
-    if (granted) {
+    if (granted && _trackingEnabledPreference) {
       await _syncBackgroundGeofences();
+      return;
     }
+    await _clearBackgroundGeofences();
   }
 
   Future<void> _syncBackgroundGeofences() async {
@@ -351,6 +353,14 @@ class _ScenarioPageState extends State<ScenarioPage>
       await LocationPermissionService.syncBackgroundGeofences(_locationChannel);
     } catch (_) {
       // Keep app flow even if native geofence sync fails.
+    }
+  }
+
+  Future<void> _clearBackgroundGeofences() async {
+    try {
+      await LocationPermissionService.clearBackgroundGeofences(_locationChannel);
+    } catch (_) {
+      // Keep app flow even if native geofence clear fails.
     }
   }
 
@@ -387,6 +397,11 @@ class _ScenarioPageState extends State<ScenarioPage>
         _trackingEnabledPreference = enabled ?? true;
         _trackingPreferenceLoaded = true;
       });
+      if (_trackingEnabledPreference) {
+        await _syncBackgroundGeofences();
+      } else {
+        await _clearBackgroundGeofences();
+      }
     } catch (_) {
       _trackingPreferenceLoaded = true;
     }
@@ -403,6 +418,12 @@ class _ScenarioPageState extends State<ScenarioPage>
       );
     } catch (_) {
       // Keep local preference value if persistence fails.
+    }
+
+    if (enabled) {
+      await _syncBackgroundGeofences();
+    } else {
+      await _clearBackgroundGeofences();
     }
   }
 
@@ -1747,6 +1768,7 @@ class _ScenarioPageState extends State<ScenarioPage>
     _uiRefreshTimer?.cancel();
     _uiRefreshTimer = null;
     unawaited(_cancelLogReminderNotification());
+    unawaited(_clearBackgroundGeofences());
     setState(() {
       _isTracking = false;
       _pendingSite = null;

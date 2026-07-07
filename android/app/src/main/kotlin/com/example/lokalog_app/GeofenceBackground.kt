@@ -29,6 +29,11 @@ private const val BACKGROUND_LOG_CHANNEL_NAME = "Background logging"
 private const val BACKGROUND_LOG_NOTIFICATION_BASE_ID = 8400
 
 object GeofenceBackground {
+    fun clearGeofences(context: Context) {
+        val client = LocationServices.getGeofencingClient(context)
+        client.removeGeofences(geofencePendingIntent(context))
+    }
+
     fun syncGeofences(context: Context) {
         val client = LocationServices.getGeofencingClient(context)
         val pendingIntent = geofencePendingIntent(context)

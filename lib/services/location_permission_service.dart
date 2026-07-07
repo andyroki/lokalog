@@ -8,6 +8,7 @@ class LocationPermissionChannelMethods {
   static const String hasBackgroundLocationPermission =
       'hasBackgroundLocationPermission';
   static const String syncBackgroundGeofences = 'syncBackgroundGeofences';
+  static const String clearBackgroundGeofences = 'clearBackgroundGeofences';
   static const String openLocationSettings = 'openLocationSettings';
   static const String openAppSettings = 'openAppSettings';
   static const String hasNotificationPermission = 'hasNotificationPermission';
@@ -94,6 +95,13 @@ class LocationPermissionService {
     await _invokeVoid(
       channel,
       LocationPermissionChannelMethods.syncBackgroundGeofences,
+    );
+  }
+
+  static Future<void> clearBackgroundGeofences(MethodChannel channel) async {
+    await _invokeVoid(
+      channel,
+      LocationPermissionChannelMethods.clearBackgroundGeofences,
     );
   }
 

@@ -139,6 +139,11 @@ class MainActivity : FlutterActivity() {
 						result.success(true)
 					}
 
+					"clearBackgroundGeofences" -> {
+						GeofenceBackground.clearGeofences(this)
+						result.success(true)
+					}
+
 					"openLocationSettings" -> {
 						openLocationSettings(result)
 					}
