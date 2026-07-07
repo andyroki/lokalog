@@ -899,7 +899,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   String _rawGpsDebugSummary() {
     final String readAt = _lastRawGpsPayloadAt == null
         ? 'No payload received yet'
-        : _formatLogTimestamp(_lastRawGpsPayloadAt!);
+        : _formatDebugTimestamp(_lastRawGpsPayloadAt!);
 
     final String errorLine = _lastRawGpsReadError == null
         ? 'Last read error: none'
@@ -933,10 +933,10 @@ class _ScenarioPageState extends State<ScenarioPage>
   String _trackingRuntimeStateDebugSummary() {
     final String restored = _trackingRuntimeStateLoadedAt == null
         ? 'Not restored yet'
-        : _formatLogTimestamp(_trackingRuntimeStateLoadedAt!);
+      : _formatDebugTimestamp(_trackingRuntimeStateLoadedAt!);
     final String saved = _trackingRuntimeStateSavedAt == null
         ? 'No save in this app session yet'
-        : _formatLogTimestamp(_trackingRuntimeStateSavedAt!);
+      : _formatDebugTimestamp(_trackingRuntimeStateSavedAt!);
 
     return 'Runtime timing state\n'
         'Restored: $restored\n'
@@ -947,7 +947,7 @@ class _ScenarioPageState extends State<ScenarioPage>
 
   String _appReadinessDebugSummary() {
     final String lastFix =
-        _lastFixAt == null ? 'none' : _formatLogTimestamp(_lastFixAt!);
+        _lastFixAt == null ? 'none' : _formatDebugTimestamp(_lastFixAt!);
 
     return 'App readiness\n'
         'Tracking running: $_isTracking\n'
@@ -1016,7 +1016,7 @@ class _ScenarioPageState extends State<ScenarioPage>
           'Base dwell map: ${_formatElapsedMinutes(baseDwell)}\n'
           'Projected dwell: ${_formatElapsedMinutes(projectedDwell)}\n'
           'Out-of-geofence: ${_formatElapsedMinutes(outMinutes)}\n'
-          'Out since: ${outSince == null ? 'none' : _formatLogTimestamp(outSince)}';
+          'Out since: ${outSince == null ? 'none' : _formatDebugTimestamp(outSince)}';
     }
 
     return 'Startup and logging gates\n'
@@ -2221,6 +2221,47 @@ class _ScenarioPageState extends State<ScenarioPage>
         '$hour12:$minute $meridiem';
   }
 
+  String _formatDebugTimestamp(DateTime value) {
+    const List<String> monthNames = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final DateTime local = value.toLocal();
+    final DateTime now = DateTime.now();
+    final Duration delta = now.difference(local);
+    final Duration absDelta = delta.isNegative ? -delta : delta;
+
+    final int hour12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final String minute = local.minute.toString().padLeft(2, '0');
+    final String meridiem = local.hour >= 12 ? 'PM' : 'AM';
+
+    String relative;
+    if (absDelta.inSeconds < 60) {
+      relative = delta.isNegative ? 'in <1m' : 'just now';
+    } else if (absDelta.inMinutes < 60) {
+      final int m = absDelta.inMinutes;
+      relative = delta.isNegative ? 'in ${m}m' : '${m}m ago';
+    } else if (absDelta.inHours < 24) {
+      final int h = absDelta.inHours;
+      relative = delta.isNegative ? 'in ${h}h' : '${h}h ago';
+    } else {
+      final int d = absDelta.inDays;
+      relative = delta.isNegative ? 'in ${d}d' : '${d}d ago';
+    }
+
+    return '${monthNames[local.month - 1]} ${local.day} $hour12:$minute $meridiem ($relative)';
+  }
+
   Future<void> _shareLogEntry(JobLog log) async {
     await LogCommunicationService.shareLogEntry(
       context: context,
@@ -3128,6 +3169,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       batteryUsageFetchedAt: _batteryUsageFetchedAt,
       batteryUsageError: _batteryUsageError,
       batteryUsage: _batteryUsage,
+      formatDebugTimestamp: _formatDebugTimestamp,
     );
   }
 

@@ -22,6 +22,7 @@ class DebugScreenView extends StatelessWidget {
     required this.usageAccessGranted,
     required this.deviceBatteryLevel,
     required this.batteryUsageFetchedAt,
+    required this.formatDebugTimestamp,
     required this.batteryUsageError,
     required this.batteryUsage,
   });
@@ -43,6 +44,7 @@ class DebugScreenView extends StatelessWidget {
   final bool usageAccessGranted;
   final int? deviceBatteryLevel;
   final DateTime? batteryUsageFetchedAt;
+  final String Function(DateTime value) formatDebugTimestamp;
   final String? batteryUsageError;
   final List<DebugBatteryAppUsage> batteryUsage;
 
@@ -207,7 +209,9 @@ class DebugScreenView extends StatelessWidget {
                 ],
                 if (batteryUsageFetchedAt != null) ...<Widget>[
                   const SizedBox(height: 6),
-                  Text('Last updated: ${batteryUsageFetchedAt!.toLocal()}'),
+                  Text(
+                    'Last updated: ${formatDebugTimestamp(batteryUsageFetchedAt!)}',
+                  ),
                 ],
                 if (batteryUsageError != null) ...<Widget>[
                   const SizedBox(height: 8),
