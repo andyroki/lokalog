@@ -56,54 +56,75 @@ class LocationsScreenView extends StatelessWidget {
             final JobSite site = entry.value;
             return Card(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor:
-                        theme.colorScheme.primaryContainer.withValues(alpha: 0.8),
-                    child: Text(
-                      '${entry.key + 1}',
-                      style: TextStyle(
-                        color: theme.colorScheme.onPrimaryContainer,
-                        fontWeight: FontWeight.w700,
-                      ),
+                padding: const EdgeInsets.fromLTRB(12, 10, 8, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: theme.colorScheme.outlineVariant,
                     ),
-                  ),
-                  title: Text(
-                    site.name,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                    const SizedBox(height: 8),
+                    Row(
+                      children: <Widget>[
+                        CircleAvatar(
+                          backgroundColor: theme.colorScheme.primaryContainer
+                              .withValues(alpha: 0.8),
+                          child: Text(
+                            '${entry.key + 1}',
+                            style: TextStyle(
+                              color: theme.colorScheme.onPrimaryContainer,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            site.name,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        PopupMenuButton<String>(
+                          onSelected: (String action) {
+                            if (action == 'edit') {
+                              onEditLocation(entry.key, site);
+                            } else if (action == 'delete') {
+                              onDeleteLocation(entry.key, site);
+                            }
+                          },
+                          itemBuilder: (BuildContext context) =>
+                              const <PopupMenuEntry<String>>[
+                            PopupMenuItem<String>(
+                              value: 'edit',
+                              child: Text('Edit'),
+                            ),
+                            PopupMenuItem<String>(
+                              value: 'delete',
+                              child: Text('Delete'),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
-                  ),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      '${site.address}\n'
-                      'Lat: ${site.lat.toStringAsFixed(5)}, Lng: ${site.lng.toStringAsFixed(5)}\n'
+                    const SizedBox(height: 8),
+                    Text(site.address),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Lat: ${site.lat.toStringAsFixed(5)}, Lng: ${site.lng.toStringAsFixed(5)}',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
                       'Log after: ${site.requiredDwellMinutes} minutes',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  isThreeLine: true,
-                  trailing: PopupMenuButton<String>(
-                    onSelected: (String action) {
-                      if (action == 'edit') {
-                        onEditLocation(entry.key, site);
-                      } else if (action == 'delete') {
-                        onDeleteLocation(entry.key, site);
-                      }
-                    },
-                    itemBuilder: (BuildContext context) =>
-                        const <PopupMenuEntry<String>>[
-                      PopupMenuItem<String>(
-                        value: 'edit',
-                        child: Text('Edit'),
-                      ),
-                      PopupMenuItem<String>(
-                        value: 'delete',
-                        child: Text('Delete'),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
             );
