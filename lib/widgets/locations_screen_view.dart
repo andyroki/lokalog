@@ -83,6 +83,8 @@ class LocationsScreenView extends StatelessWidget {
                         Expanded(
                           child: Text(
                             site.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.w700,
                             ),

@@ -72,6 +72,16 @@ class ScenarioStateController {
     logs[index] = logs[index].copyWith(notes: notes);
   }
 
+  void updateLogNameByAddress(String address, String newName) {
+    for (int index = 0; index < logs.length; index++) {
+      final JobLog log = logs[index];
+      if (log.address != address) {
+        continue;
+      }
+      logs[index] = log.copyWith(name: newName);
+    }
+  }
+
   void markLogCalendarAdded(String address, DateTime timestamp) {
     final int index = logs.indexWhere(
       (JobLog log) =>

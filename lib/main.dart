@@ -2046,9 +2046,17 @@ class _ScenarioPageState extends State<ScenarioPage>
       return;
     }
 
+    JobSite activeSite = site;
+    for (final JobSite savedSite in _sites) {
+      if (savedSite.address == site.address) {
+        activeSite = savedSite;
+        break;
+      }
+    }
+
     final DateTime now = DateTime.now();
     final JobLog? latestForSite = _logs.cast<JobLog?>().firstWhere(
-          (JobLog? log) => log?.address == site.address,
+          (JobLog? log) => log?.address == activeSite.address,
           orElse: () => null,
         );
     if (latestForSite != null) {
@@ -2056,11 +2064,11 @@ class _ScenarioPageState extends State<ScenarioPage>
           now.difference(latestForSite.timestamp).inMilliseconds / 60000;
       if (minutesSinceLast < _outOfGeofenceRetriggerMinutes) {
         setState(() {
-          _sessionLoggedAddresses.add(site.address);
+          _sessionLoggedAddresses.add(activeSite.address);
           _pendingSite = null;
           _promptCountdown = 0;
           _status =
-              'Skipped repeat log for ${site.address} (inside cooldown window).';
+              'Skipped repeat log for ${activeSite.address} (inside cooldown window).';
         });
         unawaited(_cancelLogReminderNotification());
         unawaited(_saveTrackingRuntimeState());
@@ -2074,18 +2082,18 @@ class _ScenarioPageState extends State<ScenarioPage>
       final double distance = LocationTrackingCalculator.distanceMetersBetween(
         fix.lat,
         fix.lng,
-        site.lat,
-        site.lng,
+        activeSite.lat,
+        activeSite.lng,
       );
       final bool stillInside = distance <= effectiveRadius;
 
       if (stillInside && minutesSinceLast < _duplicateLogGuardMinutes) {
         setState(() {
-          _sessionLoggedAddresses.add(site.address);
+          _sessionLoggedAddresses.add(activeSite.address);
           _pendingSite = null;
           _promptCountdown = 0;
           _status =
-              'Skipped duplicate log for ${site.address} (recent log already recorded).';
+              'Skipped duplicate log for ${activeSite.address} (recent log already recorded).';
         });
         unawaited(_cancelLogReminderNotification());
         unawaited(_saveTrackingRuntimeState());
@@ -2097,12 +2105,12 @@ class _ScenarioPageState extends State<ScenarioPage>
 
     _state.addLog(
       JobLog(
-        name: site.name,
-        address: site.address,
+        name: activeSite.name,
+        address: activeSite.address,
         notes: cleanNotes,
         lat: fix.lat,
         lng: fix.lng,
-        confidence: _confidenceScore(fix, site),
+        confidence: _confidenceScore(fix, activeSite),
         confirmedByUser: confirmedByUser,
         autoLogged: autoLogged,
         timestamp: now,
@@ -2110,13 +2118,13 @@ class _ScenarioPageState extends State<ScenarioPage>
     );
 
     setState(() {
-      _sessionLoggedAddresses.add(site.address);
-      _outOfGeofenceSince.remove(site.address);
+      _sessionLoggedAddresses.add(activeSite.address);
+      _outOfGeofenceSince.remove(activeSite.address);
       _pendingSite = null;
       _promptCountdown = 0;
       _status = autoLogged
-          ? 'No response received. Job auto-logged for ${site.address}.'
-          : 'Job confirmed and logged for ${site.address}.';
+          ? 'No response received. Job auto-logged for ${activeSite.address}.'
+          : 'Job confirmed and logged for ${activeSite.address}.';
     });
     unawaited(_cancelLogReminderNotification());
     unawaited(_saveTrackingRuntimeState());
@@ -2833,6 +2841,19 @@ class _ScenarioPageState extends State<ScenarioPage>
 
       setState(() {
         _state.updateSite(index, updatedSite);
+        _state.updateLogNameByAddress(site.address, updatedSite.name);
+        if (_candidateSite?.address == site.address) {
+          _candidateSite = updatedSite;
+        }
+        if (_pendingSite?.address == site.address) {
+          _pendingSite = updatedSite;
+        }
+        if (_latestNearest?.site.address == site.address) {
+          _latestNearest = SiteDistance(
+            site: updatedSite,
+            distanceMeters: _latestNearest!.distanceMeters,
+          );
+        }
       });
       unawaited(_saveSites());
       _onSitesChanged();

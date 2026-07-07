@@ -214,40 +214,45 @@ class LogScreenView extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Wrap(
-                        alignment: WrapAlignment.end,
-                        children: <Widget>[
-                          IconButton(
-                            tooltip: 'Share log',
-                            onPressed: () => onShareLogEntry(log),
-                            icon: const Icon(Icons.share),
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            clientName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                          IconButton(
-                            tooltip: 'Add to calendar',
-                            onPressed: () => onAddLogToCalendar(log),
-                            icon: _buildCalendarIcon(log.calendarAdded),
-                          ),
-                          IconButton(
-                            tooltip: 'Edit log notes',
-                            onPressed: () => onEditLogEntry(index, log),
-                            icon: const Icon(Icons.edit_note),
-                          ),
-                          IconButton(
-                            tooltip: 'Delete log',
-                            onPressed: () => onDeleteLogEntry(index, log),
-                            icon: const Icon(Icons.delete),
-                            color: Theme.of(context).colorScheme.error,
-                          ),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      clientName,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            IconButton(
+                              tooltip: 'Share log',
+                              onPressed: () => onShareLogEntry(log),
+                              icon: const Icon(Icons.share),
+                            ),
+                            IconButton(
+                              tooltip: 'Add to calendar',
+                              onPressed: () => onAddLogToCalendar(log),
+                              icon: _buildCalendarIcon(log.calendarAdded),
+                            ),
+                            IconButton(
+                              tooltip: 'Edit log notes',
+                              onPressed: () => onEditLogEntry(index, log),
+                              icon: const Icon(Icons.edit_note),
+                            ),
+                            IconButton(
+                              tooltip: 'Delete log',
+                              onPressed: () => onDeleteLogEntry(index, log),
+                              icon: const Icon(Icons.delete),
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Text(
