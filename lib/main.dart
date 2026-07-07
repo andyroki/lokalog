@@ -272,7 +272,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   static const String _fallbackVersion =
       String.fromEnvironment('APP_VERSION', defaultValue: '1.0.1');
   static const String _fallbackBuildNumber =
-      String.fromEnvironment('APP_BUILD_NUMBER', defaultValue: '2');
+      String.fromEnvironment('APP_BUILD_NUMBER', defaultValue: '3');
   String _appVersionLabel = '$_fallbackVersion ($_fallbackBuildNumber)';
   String? _batteryUsageError;
   int? _deviceBatteryLevel;
@@ -1557,12 +1557,10 @@ class _ScenarioPageState extends State<ScenarioPage>
       return false;
     }
 
-    final bool serviceEnabled =
-        await LocationPermissionService.isLocationServiceEnabled(
-      _locationChannel,
-    );
+    final LocationPermissionStatus permissionStatus =
+        await LocationPermissionService.getPermissionStatus(_locationChannel);
 
-    if (!serviceEnabled) {
+    if (!permissionStatus.serviceEnabled) {
       setState(() {
         _status = 'Location services are off. Turn on GPS and try again.';
       });
@@ -1578,11 +1576,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       return false;
     }
 
-    final bool granted =
-        await LocationPermissionService.checkAndRequestPermission(
-      _locationChannel,
-    );
-    if (!granted) {
+    if (!permissionStatus.foregroundPermissionGranted) {
       setState(() {
         _status =
             'Location permission denied. Allow location access to start tracking.';
@@ -1601,9 +1595,7 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
 
     final bool backgroundGranted =
-        await LocationPermissionService.hasBackgroundLocationPermission(
-      _locationChannel,
-    );
+        permissionStatus.backgroundPermissionGranted;
     if (mounted) {
       setState(() {
         _backgroundLocationPermissionGranted = backgroundGranted;
@@ -1620,6 +1612,24 @@ class _ScenarioPageState extends State<ScenarioPage>
         title: 'Background Location Needed',
         message:
             'To log when the app is closed, set Location to "Allow all the time". Open app settings now?',
+      );
+      if (shouldOpen) {
+        await _openAppSettings();
+      }
+      return false;
+    }
+
+    if (!permissionStatus.notificationPermissionGranted) {
+      setState(() {
+        _status =
+            'Notification permission is required for reminder alerts while running in the background.';
+      });
+      final bool shouldOpen =
+          await ScenarioDialogService.showGoToSettingsDialog(
+        context,
+        title: 'Notifications Needed',
+        message:
+            'Enable notifications so log reminders can show while the app runs in the background. Open app settings now?',
       );
       if (shouldOpen) {
         await _openAppSettings();
@@ -2385,14 +2395,10 @@ class _ScenarioPageState extends State<ScenarioPage>
       return null;
     }
 
-    bool serviceEnabled = false;
-    try {
-      serviceEnabled = (await _locationChannel
-              .invokeMethod<bool>('isLocationServiceEnabled')) ??
-          false;
-    } on PlatformException {
-      serviceEnabled = false;
-    }
+    final bool serviceEnabled =
+        await LocationPermissionService.isLocationServiceEnabled(
+      _locationChannel,
+    );
     if (!serviceEnabled) {
       if (!mounted) {
         return null;
@@ -2406,9 +2412,8 @@ class _ScenarioPageState extends State<ScenarioPage>
       return null;
     }
 
-    final bool granted = (await _locationChannel
-            .invokeMethod<bool>('checkAndRequestPermission')) ??
-        false;
+    final bool granted = await LocationPermissionService
+      .checkAndRequestPermission(_locationChannel);
     if (!granted) {
       if (!mounted) {
         return null;

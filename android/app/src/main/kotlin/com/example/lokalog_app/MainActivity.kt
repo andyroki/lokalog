@@ -37,9 +37,11 @@ class MainActivity : FlutterActivity() {
 	private val channelName = "lokalog/location"
 	private val sitesStorageKey = "saved_job_sites_v1"
 	private val locationPermissionRequestCode = 1001
+	private val notificationPermissionRequestCode = 1002
 	private val logReminderChannelId = "lokalog_log_reminder_channel"
 	private val logReminderNotificationId = 7301
 	private var permissionResult: MethodChannel.Result? = null
+	private var notificationPermissionResult: MethodChannel.Result? = null
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
@@ -122,6 +124,14 @@ class MainActivity : FlutterActivity() {
 
 					"hasBackgroundLocationPermission" -> {
 						result.success(GeofenceBackground.hasBackgroundLocationPermission(this))
+					}
+
+					"hasNotificationPermission" -> {
+						result.success(hasNotificationPermission())
+					}
+
+					"checkAndRequestNotificationPermission" -> {
+						checkAndRequestNotificationPermission(result)
 					}
 
 					"syncBackgroundGeofences" -> {
@@ -405,6 +415,16 @@ class MainActivity : FlutterActivity() {
 		) == PackageManager.PERMISSION_GRANTED
 	}
 
+	private fun hasNotificationPermission(): Boolean {
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+			return true
+		}
+		return ContextCompat.checkSelfPermission(
+			this,
+			Manifest.permission.POST_NOTIFICATIONS
+		) == PackageManager.PERMISSION_GRANTED
+	}
+
 	private fun hasUsageStatsPermission(): Boolean {
 		val appOps = getSystemService(APP_OPS_SERVICE) as AppOpsManager
 		val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -446,6 +466,29 @@ class MainActivity : FlutterActivity() {
 		)
 	}
 
+	private fun checkAndRequestNotificationPermission(result: MethodChannel.Result) {
+		if (hasNotificationPermission()) {
+			result.success(true)
+			return
+		}
+
+		if (notificationPermissionResult != null) {
+			result.error(
+				"PERMISSION_IN_PROGRESS",
+				"Notification permission request already running",
+				null
+			)
+			return
+		}
+
+		notificationPermissionResult = result
+		ActivityCompat.requestPermissions(
+			this,
+			arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+			notificationPermissionRequestCode
+		)
+	}
+
 	override fun onRequestPermissionsResult(
 		requestCode: Int,
 		permissions: Array<out String>,
@@ -453,6 +496,11 @@ class MainActivity : FlutterActivity() {
 	) {
 		super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 		if (requestCode != locationPermissionRequestCode) {
+			if (requestCode == notificationPermissionRequestCode) {
+				val granted = grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+				notificationPermissionResult?.success(granted)
+				notificationPermissionResult = null
+			}
 			return
 		}
 

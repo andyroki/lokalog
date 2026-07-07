@@ -102,15 +102,6 @@ class _SettingsScreenViewState extends State<SettingsScreenView> {
       children: <Widget>[
         Card(
           child: SwitchListTile(
-            title: const Text('Debug Mode'),
-            subtitle: const Text('Show or hide the Debug tab and tools.'),
-            value: widget.debugModeEnabled,
-            onChanged: widget.onDebugModeChanged,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: SwitchListTile(
             title: const Text('Dark Theme'),
             subtitle: const Text('Toggle between light and dark mode.'),
             value: widget.isDarkMode,
@@ -422,6 +413,15 @@ class _SettingsScreenViewState extends State<SettingsScreenView> {
                 ),
               ],
             ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: SwitchListTile(
+            title: const Text('Debug Mode'),
+            subtitle: const Text('Show or hide the Debug tab and tools.'),
+            value: widget.debugModeEnabled,
+            onChanged: widget.onDebugModeChanged,
           ),
         ),
       ],
