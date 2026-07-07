@@ -861,15 +861,15 @@ class _ScenarioPageState extends State<ScenarioPage>
       final String dist = state.distanceMeters == null
           ? 'no fix'
           : _fmtDist(state.distanceMeters!);
-      final String timeInGeofence =
-          state.timeInGeofenceMinutes.toStringAsFixed(1);
+        final String timeInGeofence =
+          _formatElapsedMinutes(state.timeInGeofenceMinutes);
       final String remaining = state.remainingMinutes.toStringAsFixed(1);
       final String address = _siteAddressByName(state.name);
       final double outMinutes = projectedOutOfGeofenceMinutes[address] ?? 0;
-      final String outDuration = '${outMinutes.toStringAsFixed(1)}m';
+        final String outDuration = _formatElapsedMinutes(outMinutes);
       return '${state.name}\n'
           '  in geofence: ${state.inGeofence}  |  out: ${state.outOfGeofence}  |  far: ${state.far}  |  dist: $dist\n'
-          '  time in geofence: ${timeInGeofence}m  |  out-of-geofence: $outDuration  |  remaining: ${remaining}m\n'
+          '  time in geofence: $timeInGeofence  |  out-of-geofence: $outDuration  |  remaining: ${remaining}m\n'
           '  logged: ${state.logged}  |  waiting: ${state.waitingToGetLogged}';
     }).join('\n\n');
 
@@ -883,6 +883,17 @@ class _ScenarioPageState extends State<ScenarioPage>
       }
     }
     return '';
+  }
+
+  String _formatElapsedMinutes(double minutes) {
+    final double safeMinutes = max(0, minutes);
+    if (safeMinutes < 60) {
+      return '${safeMinutes.toStringAsFixed(1)}m';
+    }
+    if (safeMinutes < 24 * 60) {
+      return '${(safeMinutes / 60).toStringAsFixed(1)}h';
+    }
+    return '${(safeMinutes / (24 * 60)).toStringAsFixed(1)}d';
   }
 
   String _rawGpsDebugSummary() {
@@ -1002,9 +1013,9 @@ class _ScenarioPageState extends State<ScenarioPage>
           'Distance: $nearestDistance\n'
           'Logged this session: $logged\n'
           'Required dwell: ${nearestSite.requiredDwellMinutes}m\n'
-          'Base dwell map: ${baseDwell.toStringAsFixed(2)}m\n'
-          'Projected dwell: ${projectedDwell.toStringAsFixed(2)}m\n'
-          'Out-of-geofence: ${outMinutes.toStringAsFixed(2)}m\n'
+          'Base dwell map: ${_formatElapsedMinutes(baseDwell)}\n'
+          'Projected dwell: ${_formatElapsedMinutes(projectedDwell)}\n'
+          'Out-of-geofence: ${_formatElapsedMinutes(outMinutes)}\n'
           'Out since: ${outSince == null ? 'none' : _formatLogTimestamp(outSince)}';
     }
 
@@ -2179,8 +2190,8 @@ class _ScenarioPageState extends State<ScenarioPage>
     return 'Nearest: ${nearest.site.address} | '
         'distance: ${_fmtDist(nearest.distanceMeters)} | '
         'target: ${nearest.site.requiredDwellMinutes} min | '
-        'time in geofence: ${timeInGeofence.toStringAsFixed(1)} min | '
-        'remaining: ${remaining.toStringAsFixed(1)} min | '
+      'time in geofence: ${_formatElapsedMinutes(timeInGeofence)} | '
+      'remaining: ${_formatElapsedMinutes(remaining)} | '
         'accuracy: $accuracyLabel | '
         'motion: ${lowSpeed ? 'stationary' : 'moving'} | '
         'geofence: ${inGeofence ? 'inside' : 'outside'} '
@@ -2862,6 +2873,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       logs: _logs,
       timeInGeofenceMinutesByAddress: _projectedTimeInGeofenceMinutesBySite(),
       outOfGeofenceMinutesByAddress: _projectedOutOfGeofenceMinutesBySite(),
+      formatElapsedMinutes: _formatElapsedMinutes,
       formatLogTimestamp: _formatLogTimestamp,
       buildNearestMessage: (SiteDistance nearest) {
         if (_shouldHideNearestInfo(nearest)) {

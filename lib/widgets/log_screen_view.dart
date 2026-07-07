@@ -13,6 +13,7 @@ class LogScreenView extends StatelessWidget {
     required this.logs,
     required this.timeInGeofenceMinutesByAddress,
     required this.outOfGeofenceMinutesByAddress,
+    required this.formatElapsedMinutes,
     required this.formatLogTimestamp,
     required this.buildNearestMessage,
     required this.onDismissPendingPrompt,
@@ -32,6 +33,7 @@ class LogScreenView extends StatelessWidget {
   final List<JobLog> logs;
   final Map<String, double> timeInGeofenceMinutesByAddress;
   final Map<String, double> outOfGeofenceMinutesByAddress;
+  final String Function(double) formatElapsedMinutes;
   final String Function(DateTime value) formatLogTimestamp;
   final String Function(SiteDistance nearest) buildNearestMessage;
   final VoidCallback onDismissPendingPrompt;
@@ -211,8 +213,8 @@ class LogScreenView extends StatelessWidget {
                       '${formatLogTimestamp(log.timestamp)}\n'
                       'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
                       '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}'
-                      '\nTime in geofence: ${timeInGeofence.toStringAsFixed(1)}m | '
-                      'Time out geofence: ${outOfGeofence.toStringAsFixed(1)}m'
+                      '\nTime in geofence: ${formatElapsedMinutes(timeInGeofence)} | '
+                      'Time out geofence: ${formatElapsedMinutes(outOfGeofence)}'
                       '${notes.isEmpty ? '' : '\nNotes: $notes'}',
                     ),
                   ],
