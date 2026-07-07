@@ -44,6 +44,73 @@ class _LokaLogAppState extends State<LokaLogApp> {
   ThemeMode _themeMode = ThemeMode.light;
   double _fontScale = 1.0;
 
+  ThemeData _buildTheme(Brightness brightness) {
+    final bool isDark = brightness == Brightness.dark;
+    final ColorScheme scheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFF0F766E),
+      brightness: brightness,
+    );
+
+    return ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      colorScheme: scheme,
+      scaffoldBackgroundColor:
+          isDark ? const Color(0xFF0D1515) : const Color(0xFFF4FAF9),
+      cardTheme: CardThemeData(
+        elevation: isDark ? 0 : 1,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        color: isDark ? const Color(0xFF152222) : Colors.white,
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: isDark ? const Color(0xFF1D2B2B) : const Color(0xFFF7FBFA),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: scheme.outlineVariant),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: scheme.outlineVariant),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: scheme.primary, width: 1.5),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        labelTextStyle: WidgetStateProperty.resolveWith<TextStyle?>(
+          (Set<WidgetState> states) {
+            final bool selected = states.contains(WidgetState.selected);
+            return TextStyle(
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            );
+          },
+        ),
+      ),
+      appBarTheme: AppBarTheme(
+        centerTitle: false,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        backgroundColor: Colors.transparent,
+        foregroundColor: scheme.onSurface,
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -105,18 +172,8 @@ class _LokaLogAppState extends State<LokaLogApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Lokalog',
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0F766E)),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0F766E),
-          brightness: Brightness.dark,
-        ),
-      ),
+      theme: _buildTheme(Brightness.light),
+      darkTheme: _buildTheme(Brightness.dark),
       builder: (BuildContext context, Widget? child) {
         final MediaQueryData media = MediaQuery.of(context);
         return MediaQuery(
@@ -3175,9 +3232,14 @@ class _ScenarioPageState extends State<ScenarioPage>
 
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final bool isDark = theme.brightness == Brightness.dark;
+
     return Scaffold(
+      extendBody: true,
       appBar: AppBar(
         toolbarHeight: 68,
+        titleSpacing: 12,
         title: AnimatedSwitcher(
           duration: const Duration(milliseconds: 220),
           child: Row(
@@ -3220,16 +3282,53 @@ class _ScenarioPageState extends State<ScenarioPage>
           ),
         ),
       ),
-      body: IndexedStack(
-        index: _selectedTabIndex,
+      body: Stack(
         children: <Widget>[
-          _buildLogScreen(),
-          _buildLocationsScreen(),
-          _buildSettingsScreen(),
-          if (_debugModeEnabled) _buildDebugScreen(),
+          Positioned(
+            top: -90,
+            left: -80,
+            child: Container(
+              width: 260,
+              height: 260,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: theme.colorScheme.primary.withValues(
+                  alpha: isDark ? 0.12 : 0.09,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -110,
+            right: -70,
+            child: Container(
+              width: 240,
+              height: 240,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: theme.colorScheme.tertiary.withValues(
+                  alpha: isDark ? 0.09 : 0.08,
+                ),
+              ),
+            ),
+          ),
+          IndexedStack(
+            index: _selectedTabIndex,
+            children: <Widget>[
+              _buildLogScreen(),
+              _buildLocationsScreen(),
+              _buildSettingsScreen(),
+              if (_debugModeEnabled) _buildDebugScreen(),
+            ],
+          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
+        height: 72,
+        elevation: 0,
+        backgroundColor: theme.colorScheme.surface.withValues(
+          alpha: isDark ? 0.92 : 0.96,
+        ),
         selectedIndex: _selectedTabIndex,
         onDestinationSelected: (int index) {
           setState(() {

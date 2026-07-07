@@ -46,102 +46,141 @@ class LogScreenView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final bool isDark = theme.brightness == Brightness.dark;
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: <Widget>[
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(statusText),
-          ),
+        _sectionCard(
+          context,
+          title: 'Live Status',
+          icon: Icons.wifi_tethering,
+          child: Text(statusText),
         ),
+        const SizedBox(height: 12),
         if (currentFix != null)
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                'Current GPS: ${currentFix!.lat.toStringAsFixed(5)}, '
-                '${currentFix!.lng.toStringAsFixed(5)}\n'
-                'Accuracy: ${_fmtAccuracy(currentFix!.accuracyMeters)} | '
-                'Speed: ${_fmtSpeed(currentFix!.speedMetersPerSecond)}',
-              ),
+          _sectionCard(
+            context,
+            title: 'Current GPS',
+            icon: Icons.my_location,
+            child: Text(
+              '${currentFix!.lat.toStringAsFixed(5)}, ${currentFix!.lng.toStringAsFixed(5)}\n'
+              'Accuracy: ${_fmtAccuracy(currentFix!.accuracyMeters)} | '
+              'Speed: ${_fmtSpeed(currentFix!.speedMetersPerSecond)}',
             ),
           ),
+        if (currentFix != null) const SizedBox(height: 12),
         if (latestNearest != null)
           Builder(
             builder: (BuildContext context) {
               final SiteDistance nearest = latestNearest!;
               final String message = buildNearestMessage(nearest);
 
-              return Card(
-                color: Theme.of(context).colorScheme.secondaryContainer,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(
-                    message,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Theme.of(context).colorScheme.onSecondaryContainer,
-                    ),
+              return Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: theme.colorScheme.secondary.withValues(alpha: 0.25),
                   ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Icon(
+                      Icons.radar,
+                      color: theme.colorScheme.onSecondaryContainer,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        message,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.onSecondaryContainer,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               );
             },
           ),
+        if (latestNearest != null) const SizedBox(height: 12),
         if (pendingSite != null)
-          Card(
-            color: Theme.of(context).colorScheme.tertiaryContainer,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    'Ready to log ${pendingSite!.name}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Auto-log in ${promptCountdown}s',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: <Widget>[
-                      TextButton(
-                        onPressed: onDismissPendingPrompt,
-                        child: const Text('Dismiss'),
-                      ),
-                      const Spacer(),
-                      FilledButton.icon(
-                        onPressed: () {
-                          final JobSite? site = pendingSite;
-                          if (site == null) {
-                            return;
-                          }
-                          onLogNow(site);
-                        },
-                        icon: const Icon(Icons.check_circle_outline),
-                        label: const Text('Log Now'),
-                      ),
-                    ],
-                  ),
-                ],
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.tertiaryContainer,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: theme.colorScheme.tertiary.withValues(alpha: 0.25),
               ),
             ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Icon(
+                      Icons.timer,
+                      color: theme.colorScheme.onTertiaryContainer,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Ready to log ${pendingSite!.name}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onTertiaryContainer,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Auto-log in ${promptCountdown}s',
+                  style: TextStyle(
+                    color: theme.colorScheme.onTertiaryContainer,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: <Widget>[
+                    TextButton(
+                      onPressed: onDismissPendingPrompt,
+                      child: const Text('Dismiss'),
+                    ),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: () {
+                        final JobSite? site = pendingSite;
+                        if (site == null) {
+                          return;
+                        }
+                        onLogNow(site);
+                      },
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('Log Now'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
+        if (pendingSite != null) const SizedBox(height: 16),
         const SizedBox(height: 16),
         Row(
           children: <Widget>[
-            const Expanded(
+            Expanded(
               child: Text(
                 'Locations Log',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
             TextButton.icon(
@@ -169,11 +208,9 @@ class LogScreenView extends StatelessWidget {
             final double outOfGeofence =
                 outOfGeofenceMinutesByAddress[address] ?? 0;
             return Card(
-              color: Theme.of(context).brightness == Brightness.dark
-                  ? Theme.of(context).colorScheme.surfaceContainerHigh
-                  : null,
+              color: isDark ? theme.colorScheme.surfaceContainerHigh : null,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
@@ -206,7 +243,12 @@ class LogScreenView extends StatelessWidget {
                         ],
                       ),
                     ),
-                    Text('Customer: $clientName'),
+                    Text(
+                      clientName,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                     const SizedBox(height: 4),
                     Text(
                       '${showAddressLine ? '$address\n' : ''}'
@@ -223,6 +265,39 @@ class LogScreenView extends StatelessWidget {
             );
           }),
       ],
+    );
+  }
+
+  Widget _sectionCard(
+    BuildContext context, {
+    required String title,
+    required IconData icon,
+    required Widget child,
+  }) {
+    final ThemeData theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Icon(icon, size: 18, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            child,
+          ],
+        ),
+      ),
     );
   }
 
