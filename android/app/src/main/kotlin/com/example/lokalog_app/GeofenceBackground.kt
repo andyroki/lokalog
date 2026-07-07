@@ -21,9 +21,11 @@ import org.json.JSONObject
 
 private const val STORE_NAME = "lokalog_store"
 private const val SITES_KEY = "saved_job_sites_v1"
+private const val TRACKING_ENABLED_KEY = "pref_tracking_enabled"
+private const val IN_GEOFENCE_DISTANCE_METERS_KEY = "pref_in_geofence_distance_meters"
 private const val BACKGROUND_LOGS_KEY = "background_logs_v1"
 private const val BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY = "background_out_of_geofence_since_v1"
-private const val GEOFENCE_RADIUS_METERS = 100f
+private const val DEFAULT_GEOFENCE_RADIUS_METERS = 200f
 private const val BACKGROUND_LOG_CHANNEL_ID = "lokalog_background_log_channel"
 private const val BACKGROUND_LOG_CHANNEL_NAME = "Background logging"
 private const val BACKGROUND_LOG_NOTIFICATION_BASE_ID = 8400
@@ -38,6 +40,11 @@ object GeofenceBackground {
         val client = LocationServices.getGeofencingClient(context)
         val pendingIntent = geofencePendingIntent(context)
 
+        if (!isTrackingEnabled(context)) {
+            client.removeGeofences(pendingIntent)
+            return
+        }
+
         if (!hasBackgroundLocationPermission(context)) {
             client.removeGeofences(pendingIntent)
             return
@@ -49,10 +56,11 @@ object GeofenceBackground {
             return
         }
 
+        val geofenceRadiusMeters = resolveGeofenceRadiusMeters(context)
         val geofences = sites.map { site ->
             Geofence.Builder()
                 .setRequestId(site.id)
-                .setCircularRegion(site.lat, site.lng, GEOFENCE_RADIUS_METERS)
+                .setCircularRegion(site.lat, site.lng, geofenceRadiusMeters)
                 .setTransitionTypes(
                     Geofence.GEOFENCE_TRANSITION_ENTER or
                         Geofence.GEOFENCE_TRANSITION_DWELL or
@@ -196,6 +204,22 @@ object GeofenceBackground {
         return loadSites(context).firstOrNull { it.id == id }
     }
 
+    fun isTrackingEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(TRACKING_ENABLED_KEY, null)
+        return raw?.equals("true", ignoreCase = true) ?: true
+    }
+
+    private fun resolveGeofenceRadiusMeters(context: Context): Float {
+        val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(IN_GEOFENCE_DISTANCE_METERS_KEY, null)
+        val parsed = raw?.toFloatOrNull()
+        if (parsed == null || parsed <= 0f) {
+            return DEFAULT_GEOFENCE_RADIUS_METERS
+        }
+        return parsed
+    }
+
     private fun loadSites(context: Context): List<SavedSite> {
         val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
         val raw = prefs.getString(SITES_KEY, null) ?: return emptyList()
@@ -255,6 +279,10 @@ object GeofenceBackground {
 
 class GeofenceBroadcastReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (!GeofenceBackground.isTrackingEnabled(context)) {
+            return
+        }
+
         val event = GeofencingEvent.fromIntent(intent) ?: return
         if (event.hasError()) {
             return
