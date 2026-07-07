@@ -1985,6 +1985,19 @@ class _ScenarioPageState extends State<ScenarioPage>
     if (latestForSite != null) {
       final double minutesSinceLast =
           now.difference(latestForSite.timestamp).inMilliseconds / 60000;
+      if (minutesSinceLast < _outOfGeofenceRetriggerMinutes) {
+        setState(() {
+          _sessionLoggedAddresses.add(site.address);
+          _pendingSite = null;
+          _promptCountdown = 0;
+          _status =
+              'Skipped repeat log for ${site.address} (inside cooldown window).';
+        });
+        unawaited(_cancelLogReminderNotification());
+        unawaited(_saveTrackingRuntimeState());
+        return;
+      }
+
       final double effectiveRadius = max(
         _matchRadiusMeters,
         min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
