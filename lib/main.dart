@@ -1924,7 +1924,7 @@ class _ScenarioPageState extends State<ScenarioPage>
 
     final double elapsedMinutes =
         DateTime.now().difference(_lastFixAt!).inMilliseconds / 60000;
-    if (elapsedMinutes <= 0 || base <= 0) {
+    if (elapsedMinutes <= 0) {
       return base;
     }
     return base + elapsedMinutes;
