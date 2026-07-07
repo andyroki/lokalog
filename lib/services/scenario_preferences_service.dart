@@ -15,6 +15,7 @@ class PollingPreferences {
     required this.closePollSeconds,
     required this.farPollSeconds,
     required this.farDistanceMeters,
+    required this.inGeofenceDistanceMeters,
     required this.outOfGeofenceRetriggerMinutes,
     required this.hideNearestWhenFar,
   });
@@ -22,6 +23,7 @@ class PollingPreferences {
   final int closePollSeconds;
   final int farPollSeconds;
   final int farDistanceMeters;
+  final int inGeofenceDistanceMeters;
   final int outOfGeofenceRetriggerMinutes;
   final bool hideNearestWhenFar;
 }
@@ -144,15 +146,18 @@ class ScenarioPreferencesService {
     required String closePollSecondsKey,
     required String farPollSecondsKey,
     required String farDistanceMetersKey,
+    required String inGeofenceDistanceMetersKey,
     required String outOfGeofenceRetriggerMinutesKey,
     required String hideNearestWhenFarKey,
     required int defaultClosePollSeconds,
     required int defaultFarPollSeconds,
     required int defaultFarDistanceMeters,
+    required int defaultInGeofenceDistanceMeters,
     required int defaultOutOfGeofenceRetriggerMinutes,
     required List<int> closePollSecondOptions,
     required List<int> farPollSecondOptions,
     required List<int> farDistanceMeterOptions,
+    required List<int> inGeofenceDistanceMeterOptions,
     required List<int> outOfGeofenceRetriggerMinuteOptions,
   }) async {
     final String? closeRaw = await channel.invokeMethod<String>(
@@ -166,6 +171,10 @@ class ScenarioPreferencesService {
     final String? distanceRaw = await channel.invokeMethod<String>(
       'loadPreference',
       <String, dynamic>{'key': farDistanceMetersKey},
+    );
+    final String? inGeofenceDistanceRaw = await channel.invokeMethod<String>(
+      'loadPreference',
+      <String, dynamic>{'key': inGeofenceDistanceMetersKey},
     );
     final String? retriggerMinutesRaw = await channel.invokeMethod<String>(
       'loadPreference',
@@ -181,6 +190,9 @@ class ScenarioPreferencesService {
     final int parsedFar = int.tryParse(farRaw ?? '') ?? defaultFarPollSeconds;
     final int parsedDistance =
         int.tryParse(distanceRaw ?? '') ?? defaultFarDistanceMeters;
+    final int parsedInGeofenceDistance =
+      int.tryParse(inGeofenceDistanceRaw ?? '') ??
+        defaultInGeofenceDistanceMeters;
     final int parsedRetriggerMinutes =
         int.tryParse(retriggerMinutesRaw ?? '') ??
             defaultOutOfGeofenceRetriggerMinutes;
@@ -195,6 +207,10 @@ class ScenarioPreferencesService {
       farDistanceMeters: farDistanceMeterOptions.contains(parsedDistance)
           ? parsedDistance
           : defaultFarDistanceMeters,
+        inGeofenceDistanceMeters:
+          inGeofenceDistanceMeterOptions.contains(parsedInGeofenceDistance)
+            ? parsedInGeofenceDistance
+            : defaultInGeofenceDistanceMeters,
       outOfGeofenceRetriggerMinutes:
           outOfGeofenceRetriggerMinuteOptions.contains(parsedRetriggerMinutes)
               ? parsedRetriggerMinutes
@@ -211,6 +227,8 @@ class ScenarioPreferencesService {
     required int farPollSeconds,
     required String farDistanceMetersKey,
     required int farDistanceMeters,
+    required String inGeofenceDistanceMetersKey,
+    required int inGeofenceDistanceMeters,
     required String outOfGeofenceRetriggerMinutesKey,
     required int outOfGeofenceRetriggerMinutes,
     required String hideNearestWhenFarKey,
@@ -235,6 +253,13 @@ class ScenarioPreferencesService {
       <String, dynamic>{
         'key': farDistanceMetersKey,
         'value': farDistanceMeters.toString(),
+      },
+    );
+    await channel.invokeMethod<void>(
+      'savePreference',
+      <String, dynamic>{
+        'key': inGeofenceDistanceMetersKey,
+        'value': inGeofenceDistanceMeters.toString(),
       },
     );
     await channel.invokeMethod<void>(

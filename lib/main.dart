@@ -173,6 +173,8 @@ class _ScenarioPageState extends State<ScenarioPage>
   static const String _farPollSecondsPreferenceKey = 'pref_far_poll_secs';
   static const String _farDistanceMetersPreferenceKey =
       'pref_far_distance_meters';
+    static const String _inGeofenceDistanceMetersPreferenceKey =
+      'pref_in_geofence_distance_meters';
   static const String _hideNearestWhenFarPreferenceKey =
       'pref_hide_nearest_when_far';
   static const String _outOfGeofenceRetriggerMinutesPreferenceKey =
@@ -193,6 +195,13 @@ class _ScenarioPageState extends State<ScenarioPage>
     3000,
     5000
   ];
+  static const List<int> _inGeofenceDistanceMeterOptions = <int>[
+    50,
+    100,
+    150,
+    200,
+    300,
+  ];
   static const List<int> _outOfGeofenceRetriggerMinuteOptions = <int>[
     1,
     20,
@@ -202,6 +211,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   static const int _defaultClosePollSeconds = 30;
   static const int _defaultFarPollSeconds = 300;
   static const int _defaultFarDistanceMeters = 3000;
+  static const int _defaultInGeofenceDistanceMeters = 200;
   static const int _defaultOutOfGeofenceRetriggerMinutes = 20;
   static const Duration _gpsReadTimeout = Duration(seconds: 20);
   static const int _maxSavedLocations = 5;
@@ -209,7 +219,6 @@ class _ScenarioPageState extends State<ScenarioPage>
   static const int _duplicateLogGuardMinutes = 2;
   static const double _maxAccuracyMeters = 50;
   static const double _maxSpeedForDwell = 1.2;
-  static const double _matchRadiusMeters = 100;
   static const List<int> _logMinuteOptions = <int>[
     1,
     5,
@@ -251,6 +260,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   int _closePollSeconds = _defaultClosePollSeconds;
   int _farPollSeconds = _defaultFarPollSeconds;
   int _farDistanceMeters = _defaultFarDistanceMeters;
+  int _inGeofenceDistanceMeters = _defaultInGeofenceDistanceMeters;
   int _outOfGeofenceRetriggerMinutes = _defaultOutOfGeofenceRetriggerMinutes;
   bool _hideNearestWhenFar = true;
   bool _useMetric = true;
@@ -526,17 +536,20 @@ class _ScenarioPageState extends State<ScenarioPage>
         closePollSecondsKey: _closePollSecondsPreferenceKey,
         farPollSecondsKey: _farPollSecondsPreferenceKey,
         farDistanceMetersKey: _farDistanceMetersPreferenceKey,
+        inGeofenceDistanceMetersKey: _inGeofenceDistanceMetersPreferenceKey,
         outOfGeofenceRetriggerMinutesKey:
             _outOfGeofenceRetriggerMinutesPreferenceKey,
         hideNearestWhenFarKey: _hideNearestWhenFarPreferenceKey,
         defaultClosePollSeconds: _defaultClosePollSeconds,
         defaultFarPollSeconds: _defaultFarPollSeconds,
         defaultFarDistanceMeters: _defaultFarDistanceMeters,
+        defaultInGeofenceDistanceMeters: _defaultInGeofenceDistanceMeters,
         defaultOutOfGeofenceRetriggerMinutes:
             _defaultOutOfGeofenceRetriggerMinutes,
         closePollSecondOptions: _closePollSecondOptions,
         farPollSecondOptions: _farPollSecondOptions,
         farDistanceMeterOptions: _farDistanceMeterOptions,
+        inGeofenceDistanceMeterOptions: _inGeofenceDistanceMeterOptions,
         outOfGeofenceRetriggerMinuteOptions:
             _outOfGeofenceRetriggerMinuteOptions,
       );
@@ -549,6 +562,7 @@ class _ScenarioPageState extends State<ScenarioPage>
         _closePollSeconds = prefs.closePollSeconds;
         _farPollSeconds = prefs.farPollSeconds;
         _farDistanceMeters = prefs.farDistanceMeters;
+        _inGeofenceDistanceMeters = prefs.inGeofenceDistanceMeters;
         _outOfGeofenceRetriggerMinutes = prefs.outOfGeofenceRetriggerMinutes;
         _hideNearestWhenFar = prefs.hideNearestWhenFar;
       });
@@ -567,6 +581,8 @@ class _ScenarioPageState extends State<ScenarioPage>
         farPollSeconds: _farPollSeconds,
         farDistanceMetersKey: _farDistanceMetersPreferenceKey,
         farDistanceMeters: _farDistanceMeters,
+        inGeofenceDistanceMetersKey: _inGeofenceDistanceMetersPreferenceKey,
+        inGeofenceDistanceMeters: _inGeofenceDistanceMeters,
         outOfGeofenceRetriggerMinutesKey:
             _outOfGeofenceRetriggerMinutesPreferenceKey,
         outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
@@ -726,9 +742,9 @@ class _ScenarioPageState extends State<ScenarioPage>
       return false;
     }
 
-    final double effectiveRadius = max(
-      _matchRadiusMeters,
-      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+      final double effectiveRadius = max(
+        _inGeofenceDistanceMeters.toDouble(),
+        min(_inGeofenceDistanceMeters + 80.0, fix.accuracyMeters + 35),
     );
     final bool nearestInGeofence = nearest.distanceMeters <= effectiveRadius;
     return nearestInGeofence;
@@ -795,7 +811,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       sites: _sites,
       fix: _currentFix,
       farDistanceMeters: _farDistanceMeters,
-      matchRadiusMeters: _matchRadiusMeters,
+      matchRadiusMeters: _inGeofenceDistanceMeters.toDouble(),
       timeInGeofenceMinutes: _projectedTimeInGeofenceMinutesBySite(),
       sessionLoggedAddresses: _sessionLoggedAddresses,
       pendingSite: _pendingSite,
@@ -1791,8 +1807,8 @@ class _ScenarioPageState extends State<ScenarioPage>
     final bool goodAccuracy = fix.accuracyMeters <= _maxAccuracyMeters;
     final bool lowSpeed = fix.speedMetersPerSecond <= _maxSpeedForDwell;
     final double effectiveRadius = max(
-      _matchRadiusMeters,
-      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+      _inGeofenceDistanceMeters.toDouble(),
+      min(_inGeofenceDistanceMeters + 80.0, fix.accuracyMeters + 35),
     );
     final bool inGeofence = nearest.distanceMeters <= effectiveRadius;
 
@@ -1836,7 +1852,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       timeInGeofenceMinutes: _timeInGeofenceMinutesBySite,
       outOfGeofenceSince: _outOfGeofenceSince,
       outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
-      matchRadiusMeters: _matchRadiusMeters,
+      matchRadiusMeters: _inGeofenceDistanceMeters.toDouble(),
       maxAccuracyMeters: _maxAccuracyMeters,
       maxSpeedForDwell: _maxSpeedForDwell,
       requiredStableSamples: _effectiveRequiredStableSamples(),
@@ -1911,8 +1927,8 @@ class _ScenarioPageState extends State<ScenarioPage>
       site.lng,
     );
     final double effectiveRadius = max(
-      _matchRadiusMeters,
-      min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+      _inGeofenceDistanceMeters.toDouble(),
+      min(_inGeofenceDistanceMeters + 80.0, fix.accuracyMeters + 35),
     );
     if (distance > effectiveRadius) {
       return base;
@@ -1999,8 +2015,8 @@ class _ScenarioPageState extends State<ScenarioPage>
       }
 
       final double effectiveRadius = max(
-        _matchRadiusMeters,
-        min(_matchRadiusMeters + 80, fix.accuracyMeters + 35),
+        _inGeofenceDistanceMeters.toDouble(),
+        min(_inGeofenceDistanceMeters + 80.0, fix.accuracyMeters + 35),
       );
       final double distance = LocationTrackingCalculator.distanceMetersBetween(
         fix.lat,
@@ -2937,10 +2953,12 @@ class _ScenarioPageState extends State<ScenarioPage>
       closePollSeconds: _closePollSeconds,
       farPollSeconds: _farPollSeconds,
       farDistanceMeters: _farDistanceMeters,
+      inGeofenceDistanceMeters: _inGeofenceDistanceMeters,
       outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
       closePollSecondOptions: _closePollSecondOptions,
       farPollSecondOptions: _farPollSecondOptions,
       farDistanceMeterOptions: _farDistanceMeterOptions,
+      inGeofenceDistanceMeterOptions: _inGeofenceDistanceMeterOptions,
       outOfGeofenceRetriggerMinuteOptions: _outOfGeofenceRetriggerMinuteOptions,
       hideNearestWhenFar: _hideNearestWhenFar,
       onClosePollSecondsChanged: (int value) {
@@ -2966,6 +2984,16 @@ class _ScenarioPageState extends State<ScenarioPage>
       onFarDistanceMetersChanged: (int value) {
         setState(() {
           _farDistanceMeters = value;
+        });
+        unawaited(_savePollingPreferences());
+        if (_isTracking) {
+          _scheduleNextPoll(immediate: true);
+        }
+        _refreshNearestUiFromCurrentFix();
+      },
+      onInGeofenceDistanceMetersChanged: (int value) {
+        setState(() {
+          _inGeofenceDistanceMeters = value;
         });
         unawaited(_savePollingPreferences());
         if (_isTracking) {

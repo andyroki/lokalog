@@ -23,15 +23,18 @@ class SettingsScreenView extends StatefulWidget {
     required this.closePollSeconds,
     required this.farPollSeconds,
     required this.farDistanceMeters,
+    required this.inGeofenceDistanceMeters,
     required this.outOfGeofenceRetriggerMinutes,
     required this.closePollSecondOptions,
     required this.farPollSecondOptions,
     required this.farDistanceMeterOptions,
+    required this.inGeofenceDistanceMeterOptions,
     required this.outOfGeofenceRetriggerMinuteOptions,
     required this.hideNearestWhenFar,
     required this.onClosePollSecondsChanged,
     required this.onFarPollSecondsChanged,
     required this.onFarDistanceMetersChanged,
+    required this.onInGeofenceDistanceMetersChanged,
     required this.onOutOfGeofenceRetriggerMinutesChanged,
     required this.onHideNearestWhenFarChanged,
     required this.formatSecondsOption,
@@ -63,15 +66,18 @@ class SettingsScreenView extends StatefulWidget {
   final int closePollSeconds;
   final int farPollSeconds;
   final int farDistanceMeters;
+  final int inGeofenceDistanceMeters;
   final int outOfGeofenceRetriggerMinutes;
   final List<int> closePollSecondOptions;
   final List<int> farPollSecondOptions;
   final List<int> farDistanceMeterOptions;
+  final List<int> inGeofenceDistanceMeterOptions;
   final List<int> outOfGeofenceRetriggerMinuteOptions;
   final bool hideNearestWhenFar;
   final ValueChanged<int> onClosePollSecondsChanged;
   final ValueChanged<int> onFarPollSecondsChanged;
   final ValueChanged<int> onFarDistanceMetersChanged;
+  final ValueChanged<int> onInGeofenceDistanceMetersChanged;
   final ValueChanged<int> onOutOfGeofenceRetriggerMinutesChanged;
   final ValueChanged<bool> onHideNearestWhenFarChanged;
   final String Function(int) formatSecondsOption;
@@ -345,6 +351,28 @@ class _SettingsScreenViewState extends State<SettingsScreenView> {
                       return;
                     }
                     widget.onFarDistanceMetersChanged(value);
+                  },
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<int>(
+                  initialValue: widget.inGeofenceDistanceMeters,
+                  decoration: const InputDecoration(
+                    labelText: 'In geofence distance',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: widget.inGeofenceDistanceMeterOptions
+                      .map(
+                        (int value) => DropdownMenuItem<int>(
+                          value: value,
+                          child: Text(widget.formatMetersOption(value)),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (int? value) {
+                    if (value == null) {
+                      return;
+                    }
+                    widget.onInGeofenceDistanceMetersChanged(value);
                   },
                 ),
                 const SizedBox(height: 10),
