@@ -1907,18 +1907,6 @@ class _ScenarioPageState extends State<ScenarioPage>
       return base;
     }
 
-    // If a site has already started accumulating dwell time, keep the
-    // displayed value advancing between GPS polls even if the last fix drifts
-    // slightly outside the fence.
-    if (base > 0) {
-      final double elapsedMinutes =
-          DateTime.now().difference(_lastFixAt!).inMilliseconds / 60000;
-      if (elapsedMinutes > 0) {
-        return base + elapsedMinutes;
-      }
-      return base;
-    }
-
     final LocationFix fix = _currentFix!;
     final double distance = LocationTrackingCalculator.distanceMetersBetween(
       fix.lat,
@@ -1931,12 +1919,12 @@ class _ScenarioPageState extends State<ScenarioPage>
       min(_inGeofenceDistanceMeters + 80.0, fix.accuracyMeters + 35),
     );
     if (distance > effectiveRadius) {
-      return base;
+      return 0;
     }
 
     final double elapsedMinutes =
         DateTime.now().difference(_lastFixAt!).inMilliseconds / 60000;
-    if (elapsedMinutes <= 0) {
+    if (elapsedMinutes <= 0 || base <= 0) {
       return base;
     }
     return base + elapsedMinutes;
