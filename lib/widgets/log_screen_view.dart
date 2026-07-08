@@ -203,10 +203,17 @@ class LogScreenView extends StatelessWidget {
             final String notes = log.notes.trim();
             final bool showAddressLine =
                 address.isNotEmpty && address != clientName;
-            final double timeInGeofence =
+            final double liveTimeInGeofence =
                 timeInGeofenceMinutesByAddress[address] ?? 0;
             final double outOfGeofence =
                 outOfGeofenceMinutesByAddress[address] ?? 0;
+            final double loggedTimeInGeofence =
+              log.timeInGeofenceMinutesAtLog ?? liveTimeInGeofence;
+            final double loggedTimeLeft =
+              log.timeRemainingMinutesAtLog ?? 0;
+            final DateTime? firstInGeofenceAt = log.firstInGeofenceAt;
+            final DateTime lastInGeofenceAt =
+              log.lastInGeofenceAt ?? log.timestamp;
             return Card(
               color: isDark ? theme.colorScheme.surfaceContainerHigh : null,
               child: Padding(
@@ -260,8 +267,11 @@ class LogScreenView extends StatelessWidget {
                       '${formatLogTimestamp(log.timestamp)}\n'
                       'Confidence: ${log.confidence.toStringAsFixed(1)}% | '
                       '${log.confirmedByUser ? 'confirmed' : 'auto-logged'}'
-                      '\nTime in geofence: ${formatElapsedMinutes(timeInGeofence)} | '
-                      'Time out geofence: ${formatElapsedMinutes(outOfGeofence)}'
+                      '\nTime in geofence: ${formatElapsedMinutes(loggedTimeInGeofence)} | '
+                      'Time left: ${formatElapsedMinutes(loggedTimeLeft)}'
+                      '\nFirst in geofence: ${firstInGeofenceAt == null ? 'n/a' : formatLogTimestamp(firstInGeofenceAt)}'
+                      '\nLast in geofence: ${formatLogTimestamp(lastInGeofenceAt)}'
+                      '\nTime out geofence: ${formatElapsedMinutes(outOfGeofence)}'
                       '${notes.isEmpty ? '' : '\nNotes: $notes'}',
                     ),
                   ],

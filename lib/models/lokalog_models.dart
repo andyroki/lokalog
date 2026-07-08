@@ -120,6 +120,10 @@ class JobLog {
     required this.confirmedByUser,
     required this.autoLogged,
     this.calendarAdded = false,
+    this.firstInGeofenceAt,
+    this.lastInGeofenceAt,
+    this.timeInGeofenceMinutesAtLog,
+    this.timeRemainingMinutesAtLog,
     required this.timestamp,
   });
 
@@ -132,6 +136,10 @@ class JobLog {
   final bool confirmedByUser;
   final bool autoLogged;
   final bool calendarAdded;
+  final DateTime? firstInGeofenceAt;
+  final DateTime? lastInGeofenceAt;
+  final double? timeInGeofenceMinutesAtLog;
+  final double? timeRemainingMinutesAtLog;
   final DateTime timestamp;
 
   JobLog copyWith({
@@ -144,6 +152,10 @@ class JobLog {
     bool? confirmedByUser,
     bool? autoLogged,
     bool? calendarAdded,
+    DateTime? firstInGeofenceAt,
+    DateTime? lastInGeofenceAt,
+    double? timeInGeofenceMinutesAtLog,
+    double? timeRemainingMinutesAtLog,
     DateTime? timestamp,
   }) {
     return JobLog(
@@ -156,6 +168,12 @@ class JobLog {
       confirmedByUser: confirmedByUser ?? this.confirmedByUser,
       autoLogged: autoLogged ?? this.autoLogged,
       calendarAdded: calendarAdded ?? this.calendarAdded,
+      firstInGeofenceAt: firstInGeofenceAt ?? this.firstInGeofenceAt,
+      lastInGeofenceAt: lastInGeofenceAt ?? this.lastInGeofenceAt,
+      timeInGeofenceMinutesAtLog:
+          timeInGeofenceMinutesAtLog ?? this.timeInGeofenceMinutesAtLog,
+      timeRemainingMinutesAtLog:
+          timeRemainingMinutesAtLog ?? this.timeRemainingMinutesAtLog,
       timestamp: timestamp ?? this.timestamp,
     );
   }

@@ -2116,6 +2116,15 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
 
     final String cleanNotes = notes.trim();
+    final double timeInGeofenceAtLog = _liveTimeInGeofenceMinutes(activeSite);
+    final double timeRemainingAtLog = max(
+      0,
+      activeSite.requiredDwellMinutes.toDouble() - timeInGeofenceAtLog,
+    );
+    final DateTime lastInGeofenceAt = _lastFixAt ?? now;
+    final int inGeofenceMillis = max(0, (timeInGeofenceAtLog * 60000).round());
+    final DateTime firstInGeofenceAt =
+        lastInGeofenceAt.subtract(Duration(milliseconds: inGeofenceMillis));
 
     _state.addLog(
       JobLog(
@@ -2127,6 +2136,10 @@ class _ScenarioPageState extends State<ScenarioPage>
         confidence: _confidenceScore(fix, activeSite),
         confirmedByUser: confirmedByUser,
         autoLogged: autoLogged,
+        firstInGeofenceAt: firstInGeofenceAt,
+        lastInGeofenceAt: lastInGeofenceAt,
+        timeInGeofenceMinutesAtLog: timeInGeofenceAtLog,
+        timeRemainingMinutesAtLog: timeRemainingAtLog,
         timestamp: now,
       ),
     );
