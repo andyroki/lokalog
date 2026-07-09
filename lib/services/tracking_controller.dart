@@ -85,6 +85,10 @@ class TrackingController {
       );
       final bool inGeofence = distance <= effectiveRadius;
       final bool isLogged = sessionLoggedAddresses.contains(site.address);
+      final double retriggerOutsideRadius =
+          effectiveRadius + (fix.accuracyMeters * 0.75 < 25 ? 25 : fix.accuracyMeters * 0.75);
+      final bool confidentlyOutside =
+          distance > retriggerOutsideRadius && goodAccuracy;
 
       if (distance < nearestDistance) {
         nearestSite = site;
@@ -101,7 +105,7 @@ class TrackingController {
       }
 
       if (isLogged) {
-        if (!inGeofence) {
+        if (confidentlyOutside) {
           final DateTime outSince =
               outOfGeofenceSince.putIfAbsent(site.address, () => now);
           if (now.difference(outSince).inMinutes >=
@@ -111,6 +115,8 @@ class TrackingController {
             timeInGeofenceMinutes[site.address] = 0;
           }
         } else {
+          // Only allow retrigger timer to run while we are clearly outside.
+          // Borderline/low-confidence readings should not accumulate out time.
           outOfGeofenceSince.remove(site.address);
         }
         continue;
