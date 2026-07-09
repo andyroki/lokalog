@@ -1380,15 +1380,54 @@ class _ScenarioPageState extends State<ScenarioPage>
         return;
       }
 
+      final Map<String, JobSite> siteByAddress = <String, JobSite>{
+        for (final JobSite site in _sites) site.address: site,
+      };
+
       final List<JobLog> loadedLogs = decoded
           .whereType<Map<String, dynamic>>()
           .map((Map<String, dynamic> item) {
         final int timestampMillis = ((item['timestamp'] as num?)?.toInt() ??
             DateTime.now().millisecondsSinceEpoch);
+        final String address = (item['address'] ?? '').toString();
+        final JobSite? site = siteByAddress[address];
+        final DateTime timestamp =
+            DateTime.fromMillisecondsSinceEpoch(timestampMillis);
+
+        final double? parsedTimeInAtLog =
+            (item['timeInGeofenceMinutesAtLog'] as num?)?.toDouble();
+        final double inferredTimeInAtLog = parsedTimeInAtLog ??
+            (site == null ? 0 : site.requiredDwellMinutes.toDouble());
+
+        final double? parsedTimeRemainingAtLog =
+            (item['timeRemainingMinutesAtLog'] as num?)?.toDouble();
+        final double inferredTimeRemainingAtLog =
+            parsedTimeRemainingAtLog ?? 0;
+
+        final int? parsedFirstInMillis =
+            (item['firstInGeofenceAt'] as num?)?.toInt();
+        final int? parsedLastInMillis =
+            (item['lastInGeofenceAt'] as num?)?.toInt();
+
+        final DateTime lastInGeofenceAt =
+            parsedLastInMillis == null || parsedLastInMillis <= 0
+                ? timestamp
+                : DateTime.fromMillisecondsSinceEpoch(parsedLastInMillis);
+
+        final DateTime firstInGeofenceAt =
+            parsedFirstInMillis == null || parsedFirstInMillis <= 0
+                ? lastInGeofenceAt.subtract(
+                    Duration(
+                      milliseconds:
+                          max(0, (inferredTimeInAtLog * 60000).round()),
+                    ),
+                  )
+                : DateTime.fromMillisecondsSinceEpoch(parsedFirstInMillis);
+
         return JobLog(
           name: (item['name'] ?? item['siteName'] ?? item['address'] ?? '')
               .toString(),
-          address: (item['address'] ?? '').toString(),
+          address: address,
           notes: (item['notes'] ?? '').toString(),
           lat: ((item['lat'] as num?)?.toDouble() ?? 0),
           lng: ((item['lng'] as num?)?.toDouble() ?? 0),
@@ -1399,13 +1438,15 @@ class _ScenarioPageState extends State<ScenarioPage>
               false ||
                   _calendarAddedLogKeys.contains(
                     _logStorageKey(
-                      address: (item['address'] ?? '').toString(),
+                      address: address,
                       timestampMillis: timestampMillis,
                     ),
                   ),
-          timestamp: DateTime.fromMillisecondsSinceEpoch(
-            timestampMillis,
-          ),
+          firstInGeofenceAt: firstInGeofenceAt,
+          lastInGeofenceAt: lastInGeofenceAt,
+          timeInGeofenceMinutesAtLog: inferredTimeInAtLog,
+          timeRemainingMinutesAtLog: inferredTimeRemainingAtLog,
+          timestamp: timestamp,
         );
       }).where((JobLog log) {
         final String key = _logStorageKey(
