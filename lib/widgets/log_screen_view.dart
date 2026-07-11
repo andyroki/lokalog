@@ -208,16 +208,18 @@ class LogScreenView extends StatelessWidget {
             final double outOfGeofence =
                 outOfGeofenceMinutesByAddress[address] ?? 0;
             final DateTime now = DateTime.now();
+            final bool isMostRecentForAddress =
+              logs.take(index).every((JobLog prior) => prior.address != address);
             final double loggedTimeInGeofence =
               log.timeInGeofenceMinutesAtLog ?? liveTimeInGeofence;
             final double loggedTimeLeft =
               log.timeRemainingMinutesAtLog ?? 0;
             final DateTime? firstInGeofenceAt = log.firstInGeofenceAt;
             DateTime lastInGeofenceAt;
-            if (liveTimeInGeofence > 0) {
+            if (isMostRecentForAddress && liveTimeInGeofence > 0) {
               // While still in geofence, the latest good in-geofence reading is now.
               lastInGeofenceAt = now;
-            } else if (outOfGeofence > 0) {
+            } else if (isMostRecentForAddress && outOfGeofence > 0) {
               // Once outside, keep the last-in boundary fixed at the exit moment.
               lastInGeofenceAt = now.subtract(
                 Duration(milliseconds: (outOfGeofence * 60000).round()),

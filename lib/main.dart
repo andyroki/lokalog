@@ -2109,6 +2109,20 @@ class _ScenarioPageState extends State<ScenarioPage>
       }
     }
 
+    // Hard guard: a site can log only once per visit.
+    // It becomes eligible again only when out-of-geofence retrigger clears
+    // sessionLoggedAddresses, or Debug Retrigger explicitly clears it.
+    if (_sessionLoggedAddresses.contains(activeSite.address)) {
+      setState(() {
+        _pendingSite = null;
+        _promptCountdown = 0;
+        _status =
+            'Already logged for this visit at ${activeSite.address}. Leave geofence for retrigger timer or use Debug Retrigger.';
+      });
+      unawaited(_cancelLogReminderNotification());
+      return;
+    }
+
     final DateTime now = DateTime.now();
     final JobLog? latestForSite = _logs.cast<JobLog?>().firstWhere(
           (JobLog? log) => log?.address == activeSite.address,
