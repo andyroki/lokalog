@@ -8,10 +8,12 @@ import android.app.usage.UsageStats
 import android.app.usage.UsageStatsManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.location.Location
 import android.os.Build
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Handler
 import android.os.Looper
 import android.provider.CalendarContract
 import android.provider.Settings
@@ -31,6 +33,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
 class MainActivity : FlutterActivity() {
@@ -42,6 +45,24 @@ class MainActivity : FlutterActivity() {
 	private val logReminderNotificationId = 7301
 	private var permissionResult: MethodChannel.Result? = null
 	private var notificationPermissionResult: MethodChannel.Result? = null
+
+	private class OneShotResult(private val delegate: MethodChannel.Result) {
+		private val completed = AtomicBoolean(false)
+
+		fun success(payload: Any?) {
+			if (completed.compareAndSet(false, true)) {
+				delegate.success(payload)
+			}
+		}
+
+		fun error(code: String, message: String?, details: Any? = null) {
+			if (completed.compareAndSet(false, true)) {
+				delegate.error(code, message, details)
+			}
+		}
+
+		fun isCompleted(): Boolean = completed.get()
+	}
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
@@ -525,39 +546,70 @@ class MainActivity : FlutterActivity() {
 
 		val fused = LocationServices.getFusedLocationProviderClient(this)
 		val tokenSource = CancellationTokenSource()
+		val oneShot = OneShotResult(result)
+		val timeoutHandler = Handler(Looper.getMainLooper())
+		val timeoutRunnable = Runnable {
+			tokenSource.cancel()
+			oneShot.error("LOCATION_TIMEOUT", "Timed out waiting for GPS fix", null)
+		}
+		timeoutHandler.postDelayed(timeoutRunnable, 18000L)
+
+		fun completeWithLocation(location: Location) {
+			timeoutHandler.removeCallbacks(timeoutRunnable)
+			tokenSource.cancel()
+			sendLocationResult(
+				location.latitude,
+				location.longitude,
+				location.accuracy.toDouble(),
+				location.speed.toDouble(),
+				oneShot
+			)
+		}
+
+		fun completeWithError(code: String, message: String?) {
+			timeoutHandler.removeCallbacks(timeoutRunnable)
+			tokenSource.cancel()
+			oneShot.error(code, message, null)
+		}
+
 		fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, tokenSource.token)
 			.addOnSuccessListener { location ->
+				if (oneShot.isCompleted()) {
+					return@addOnSuccessListener
+				}
 				if (location != null) {
-					sendLocationResult(location.latitude, location.longitude, location.accuracy.toDouble(), location.speed.toDouble(), result)
+					completeWithLocation(location)
 					return@addOnSuccessListener
 				}
 
 				fused.lastLocation
 					.addOnSuccessListener { fallback ->
-						if (fallback == null) {
-							requestSingleFreshLocation(fused, result)
+						if (oneShot.isCompleted()) {
 							return@addOnSuccessListener
 						}
-						sendLocationResult(
-							fallback.latitude,
-							fallback.longitude,
-							fallback.accuracy.toDouble(),
-							fallback.speed.toDouble(),
-							result
-						)
+						if (fallback == null) {
+							requestSingleFreshLocation(
+								fused,
+								onLocation = ::completeWithLocation,
+								onError = ::completeWithError
+							)
+							return@addOnSuccessListener
+						}
+						completeWithLocation(fallback)
 					}
 					.addOnFailureListener { error ->
-						result.error("LOCATION_ERROR", error.message, null)
+						completeWithError("LOCATION_ERROR", error.message)
 					}
 			}
 			.addOnFailureListener { error ->
-				result.error("LOCATION_ERROR", error.message, null)
+				completeWithError("LOCATION_ERROR", error.message)
 			}
 	}
 
 	private fun requestSingleFreshLocation(
 		fused: com.google.android.gms.location.FusedLocationProviderClient,
-		result: MethodChannel.Result
+		onLocation: (Location) -> Unit,
+		onError: (String, String?) -> Unit
 	) {
 		val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
 			.setWaitForAccurateLocation(true)
@@ -570,23 +622,17 @@ class MainActivity : FlutterActivity() {
 				fused.removeLocationUpdates(this)
 				val location = locationResult.lastLocation
 				if (location == null) {
-					result.error("NO_LOCATION", "No location available", null)
+					onError("NO_LOCATION", "No location available")
 					return
 				}
-				sendLocationResult(
-					location.latitude,
-					location.longitude,
-					location.accuracy.toDouble(),
-					location.speed.toDouble(),
-					result
-				)
+				onLocation(location)
 			}
 		}
 
 		fused.requestLocationUpdates(request, callback, Looper.getMainLooper())
 			.addOnFailureListener { error ->
 				fused.removeLocationUpdates(callback)
-				result.error("LOCATION_ERROR", error.message, null)
+				onError("LOCATION_ERROR", error.message)
 			}
 	}
 
@@ -689,6 +735,22 @@ class MainActivity : FlutterActivity() {
 
 	private fun roundToOneDecimal(value: Double): Double {
 		return (value * 10.0).roundToInt() / 10.0
+	}
+
+	private fun sendLocationResult(
+		latitude: Double,
+		longitude: Double,
+		accuracy: Double,
+		speed: Double,
+		result: OneShotResult
+	) {
+		val payload = mapOf(
+			"latitude" to latitude,
+			"longitude" to longitude,
+			"accuracy" to accuracy,
+			"speed" to speed
+		)
+		result.success(payload)
 	}
 
 	private fun sendLocationResult(

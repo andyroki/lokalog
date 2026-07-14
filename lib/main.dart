@@ -17,6 +17,7 @@ import 'services/log_entry_actions_controller.dart';
 import 'services/location_permission_service.dart';
 import 'services/log_communication_service.dart';
 import 'services/location_add_workflow_controller.dart';
+import 'services/location_fix_parser.dart';
 import 'services/location_tracking_calculator.dart';
 import 'services/scenario_dialog_service.dart';
 import 'services/scenario_preferences_service.dart';
@@ -89,13 +90,15 @@ class _LokaLogAppState extends State<LokaLogApp> {
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
@@ -230,7 +233,7 @@ class _ScenarioPageState extends State<ScenarioPage>
     with WidgetsBindingObserver {
   static const MethodChannel _locationChannel =
       MethodChannel('lokalog/location');
-  
+
   // Storage keys for background log tracking
   static const String _sitesStorageKey = 'saved_job_sites_v1';
   static const String _deletedLogKeysPreferenceKey =
@@ -243,16 +246,16 @@ class _ScenarioPageState extends State<ScenarioPage>
   late GeofenceCalculator _geofenceCalc;
 
   final ScenarioStateController _state = ScenarioStateController();
-  
+
   // Grouped state objects for better organization
   late TrackingState _tracking;
   late GeofenceLocationState _geofence;
   late GPSFixState _gpsState;
-  
+
   // Background log tracking load flags
   bool _deletedLogKeysLoaded = false;
   bool _calendarAddedLogKeysLoaded = false;
-  
+
   // Startup and lifecycle flags (continued)
   int _selectedTabIndex = 0;
   bool _isChangingTrackingState = false;
@@ -288,7 +291,8 @@ class _ScenarioPageState extends State<ScenarioPage>
   int _farPollSeconds = AppConstants.farPollSeconds;
   int _farDistanceMeters = AppConstants.farDistanceMeters;
   int _inGeofenceDistanceMeters = AppConstants.inGeofenceDistanceMeters;
-  int _outOfGeofenceRetriggerMinutes = AppConstants.outOfGeofenceRetriggerMinutes;
+  int _outOfGeofenceRetriggerMinutes =
+      AppConstants.outOfGeofenceRetriggerMinutes;
   bool _hideNearestWhenFar = true;
   bool _useMetric = true;
   bool _trackingEnabledPreference = true;
@@ -316,18 +320,18 @@ class _ScenarioPageState extends State<ScenarioPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    
+
     // Initialize grouped state objects
     _tracking = TrackingState();
     _geofence = GeofenceLocationState();
     _gpsState = GPSFixState();
-    
+
     // Initialize managers
     _prefsManager = AppPreferencesManager(_locationChannel);
     _geofenceCalc = GeofenceCalculator(
       inGeofenceDistanceMeters: _inGeofenceDistanceMeters.toDouble(),
     );
-    
+
     _initializeAppVersionLabel();
     _initializeManagers();
   }
@@ -375,9 +379,11 @@ class _ScenarioPageState extends State<ScenarioPage>
 
   DateTime? get lastFixAt => _tracking.lastFixAt;
 
-  DateTime? get trackingRuntimeStateLoadedAt => _tracking.trackingRuntimeStateLoadedAt;
+  DateTime? get trackingRuntimeStateLoadedAt =>
+      _tracking.trackingRuntimeStateLoadedAt;
 
-  DateTime? get trackingRuntimeStateSavedAt => _tracking.trackingRuntimeStateSavedAt;
+  DateTime? get trackingRuntimeStateSavedAt =>
+      _tracking.trackingRuntimeStateSavedAt;
 
   LocationFix? get currentFix => _gpsState.currentFix;
 
@@ -453,7 +459,8 @@ class _ScenarioPageState extends State<ScenarioPage>
 
   Future<void> _clearBackgroundGeofences() async {
     try {
-      await LocationPermissionService.clearBackgroundGeofences(_locationChannel);
+      await LocationPermissionService.clearBackgroundGeofences(
+          _locationChannel);
     } catch (_) {
       // Keep app flow even if native geofence clear fails.
     }
@@ -735,8 +742,8 @@ class _ScenarioPageState extends State<ScenarioPage>
   String _formatMetersOption(int meters) => _fmtDistInt(meters);
 
   /// Determine if should use far polling interval for the nearest logged site.
-  /// Returns true if the nearest site has been logged AND is currently in geofence.
-  /// This prevents rapid re-logging by keeping close polling active after a log.
+  /// Returns true if the nearest site has been logged AND is outside geofence.
+  /// Inside geofence should always use close polling for responsiveness.
   bool _shouldUseFarPollingForNearestLoggedSite(SiteDistance nearest) {
     final LocationFix? fix = _gpsState.currentFix;
     if (fix == null) {
@@ -749,9 +756,10 @@ class _ScenarioPageState extends State<ScenarioPage>
       return false;
     }
 
-    final double effectiveRadius = _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
+    final double effectiveRadius =
+        _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
     final bool nearestInGeofence = nearest.distanceMeters <= effectiveRadius;
-    return nearestInGeofence;
+    return !nearestInGeofence;
   }
 
   int _activePollSeconds() {
@@ -798,7 +806,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       return 'far';
     }
     if (_shouldUseFarPollingForNearestLoggedSite(nearest)) {
-      return 'far (logged in geofence)';
+      return 'far (logged and outside geofence)';
     }
     return 'close';
   }
@@ -865,12 +873,12 @@ class _ScenarioPageState extends State<ScenarioPage>
       final String dist = state.distanceMeters == null
           ? 'no fix'
           : _fmtDist(state.distanceMeters!);
-        final String timeInGeofence =
+      final String timeInGeofence =
           _formatElapsedMinutes(state.timeInGeofenceMinutes);
       final String remaining = state.remainingMinutes.toStringAsFixed(1);
       final String address = _siteAddressByName(state.name);
       final double outMinutes = projectedOutOfGeofenceMinutes[address] ?? 0;
-        final String outDuration = _formatElapsedMinutes(outMinutes);
+      final String outDuration = _formatElapsedMinutes(outMinutes);
       return '${state.name}\n'
           '  in geofence: ${state.inGeofence}  |  out: ${state.outOfGeofence}  |  far: ${state.far}  |  dist: $dist\n'
           '  time in geofence: $timeInGeofence  |  out-of-geofence: $outDuration  |  remaining: ${remaining}m\n'
@@ -950,8 +958,9 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   String _appReadinessDebugSummary() {
-    final String lastFix =
-        _tracking.lastFixAt == null ? 'none' : _formatDebugTimestamp(_tracking.lastFixAt!);
+    final String lastFix = _tracking.lastFixAt == null
+        ? 'none'
+        : _formatDebugTimestamp(_tracking.lastFixAt!);
 
     return 'App readiness\n'
         'Tracking running: ${_tracking.isTracking}\n'
@@ -1011,28 +1020,26 @@ class _ScenarioPageState extends State<ScenarioPage>
       final bool logged = _sessionLoggedAddresses.contains(address);
       final DateTime? outSince = _outOfGeofenceSince[address];
       final JobLog? latestLogForSite = _logs.cast<JobLog?>().firstWhere(
-        (JobLog? log) => log?.address == address,
-        orElse: () => null,
-        );
+            (JobLog? log) => log?.address == address,
+            orElse: () => null,
+          );
       final double? lastLogAgeMinutes = latestLogForSite == null
-        ? null
-        : _minutesSince(latestLogForSite.timestamp, now);
-      final bool retriggerWindowElapsed =
-        lastLogAgeMinutes != null &&
-        lastLogAgeMinutes >= _outOfGeofenceRetriggerMinutes;
+          ? null
+          : _minutesSince(latestLogForSite.timestamp, now);
+      final bool retriggerWindowElapsed = lastLogAgeMinutes != null &&
+          lastLogAgeMinutes >= _outOfGeofenceRetriggerMinutes;
 
       final LocationFix? fix = _gpsState.currentFix;
       final double? effectiveRadius = fix == null
-        ? null
-        : _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
+          ? null
+          : _geofenceCalc
+              .calculateEffectiveRadius(fix.accuracyMeters.toDouble());
       final double? currentDistance = nearest?.distanceMeters;
       final double outsideBuffer = fix == null
-        ? 0
-        : (fix.accuracyMeters * 0.75 < 25
-          ? 25
-          : fix.accuracyMeters * 0.75);
+          ? 0
+          : (fix.accuracyMeters * 0.75 < 25 ? 25 : fix.accuracyMeters * 0.75);
       final double? retriggerOutsideThreshold =
-        effectiveRadius == null ? null : effectiveRadius + outsideBuffer;
+          effectiveRadius == null ? null : effectiveRadius + outsideBuffer;
       final double requiredOutsideDistance = retriggerOutsideThreshold == null
           ? AppConstants.retriggerMinimumOutsideDistanceMeters
           : (retriggerOutsideThreshold >
@@ -1040,16 +1047,16 @@ class _ScenarioPageState extends State<ScenarioPage>
               ? retriggerOutsideThreshold
               : AppConstants.retriggerMinimumOutsideDistanceMeters);
       final bool stillInside = currentDistance != null &&
-        effectiveRadius != null &&
-        currentDistance <= effectiveRadius;
-      final bool confidentlyOutside = currentDistance != null &&
-        currentDistance > requiredOutsideDistance;
+          effectiveRadius != null &&
+          currentDistance <= effectiveRadius;
+      final bool confidentlyOutside =
+          currentDistance != null && currentDistance > requiredOutsideDistance;
       final bool retriggerEligible =
-        confidentlyOutside && retriggerWindowElapsed;
+          confidentlyOutside && retriggerWindowElapsed;
 
       final String lastLogAgeLine = lastLogAgeMinutes == null
-        ? 'n/a'
-        : _formatElapsedMinutes(lastLogAgeMinutes);
+          ? 'n/a'
+          : _formatElapsedMinutes(lastLogAgeMinutes);
       final String outsideThresholdLine = _fmtDist(requiredOutsideDistance);
 
       nearestBlock = 'Nearest logging diagnostics\n'
@@ -1057,12 +1064,12 @@ class _ScenarioPageState extends State<ScenarioPage>
           'Address: $address\n'
           'Distance: $nearestDistance\n'
           'Logged this session: $logged\n'
-        'Last log age: $lastLogAgeLine\n'
-        'Still inside geofence: $stillInside\n'
-        'Outside threshold: $outsideThresholdLine\n'
-        'Confidently outside: $confidentlyOutside\n'
-        'Retrigger window elapsed (${_outOfGeofenceRetriggerMinutes}m): $retriggerWindowElapsed\n'
-        'Retrigger eligible now: $retriggerEligible\n'
+          'Last log age: $lastLogAgeLine\n'
+          'Still inside geofence: $stillInside\n'
+          'Outside threshold: $outsideThresholdLine\n'
+          'Confidently outside: $confidentlyOutside\n'
+          'Retrigger window elapsed (${_outOfGeofenceRetriggerMinutes}m): $retriggerWindowElapsed\n'
+          'Retrigger eligible now: $retriggerEligible\n'
           'Required dwell: ${nearestSite.requiredDwellMinutes}m\n'
           'Base dwell map: ${_formatElapsedMinutes(baseDwell)}\n'
           'Projected dwell: ${_formatElapsedMinutes(projectedDwell)}\n'
@@ -1407,8 +1414,7 @@ class _ScenarioPageState extends State<ScenarioPage>
 
         final double? parsedTimeRemainingAtLog =
             (item['timeRemainingMinutesAtLog'] as num?)?.toDouble();
-        final double inferredTimeRemainingAtLog =
-            parsedTimeRemainingAtLog ?? 0;
+        final double inferredTimeRemainingAtLog = parsedTimeRemainingAtLog ?? 0;
 
         final int? parsedFirstInMillis =
             (item['firstInGeofenceAt'] as num?)?.toInt();
@@ -1420,15 +1426,14 @@ class _ScenarioPageState extends State<ScenarioPage>
                 ? timestamp
                 : DateTime.fromMillisecondsSinceEpoch(parsedLastInMillis);
 
-        final DateTime firstInGeofenceAt =
-            parsedFirstInMillis == null || parsedFirstInMillis <= 0
-                ? lastInGeofenceAt.subtract(
-                    Duration(
-                      milliseconds:
-                          (inferredTimeInAtLog * 60000).round().toInt(),
-                    ),
-                  )
-                : DateTime.fromMillisecondsSinceEpoch(parsedFirstInMillis);
+        final DateTime firstInGeofenceAt = parsedFirstInMillis == null ||
+                parsedFirstInMillis <= 0
+            ? lastInGeofenceAt.subtract(
+                Duration(
+                  milliseconds: (inferredTimeInAtLog * 60000).round().toInt(),
+                ),
+              )
+            : DateTime.fromMillisecondsSinceEpoch(parsedFirstInMillis);
 
         return JobLog(
           name: (item['name'] ?? item['siteName'] ?? item['address'] ?? '')
@@ -1760,31 +1765,26 @@ class _ScenarioPageState extends State<ScenarioPage>
         _gpsState.lastRawGpsReadError = null;
       });
 
-      final double? lat = (position?['latitude'] as num?)?.toDouble();
-      final double? lng = (position?['longitude'] as num?)?.toDouble();
-      if (lat == null || lng == null) {
+      final ParsedLocationFix parsedFix = LocationFixParser.parse(position);
+      if (!parsedFix.isValid || parsedFix.fix == null) {
         setState(() {
-          _tracking.status = 'GPS payload missing latitude or longitude.';
+          _gpsState.lastRawGpsReadError =
+              parsedFix.errorMessage ?? 'invalid GPS payload';
+          _tracking.status =
+              parsedFix.errorMessage ?? 'Unable to read GPS coordinates.';
         });
         return;
       }
 
-      final LocationFix fix = LocationFix(
-        lat: lat,
-        lng: lng,
-        accuracyMeters: ((position?['accuracy'] as num?)?.toDouble() ?? 999),
-        speedMetersPerSecond: max(
-          0,
-          ((position?['speed'] as num?)?.toDouble() ?? 0),
-        ),
-      );
+      final LocationFix fix = parsedFix.fix!;
       _processFix(fix);
     } on TimeoutException {
       if (!mounted || !_tracking.isTracking) {
         return;
       }
       setState(() {
-        _gpsState.lastRawGpsReadError = 'timeout after ${AppConstants.gpsReadTimeout.inSeconds}s';
+        _gpsState.lastRawGpsReadError =
+            'timeout after ${AppConstants.gpsReadTimeout.inSeconds}s';
         _tracking.status =
             'GPS read timed out. Move outdoors for clearer sky view and try again.';
       });
@@ -1792,11 +1792,13 @@ class _ScenarioPageState extends State<ScenarioPage>
       if (!mounted || !_tracking.isTracking) {
         return;
       }
+      final bool timedOut = error.code == 'LOCATION_TIMEOUT';
       setState(() {
         _gpsState.lastRawGpsReadError =
             '${error.code}: ${error.message ?? 'unknown error'}';
-        _tracking.status =
-            'GPS error (${error.code}): ${error.message ?? 'unknown error'}';
+        _tracking.status = timedOut
+            ? 'GPS read timed out. Move outdoors for clearer sky view and try again.'
+            : 'GPS error (${error.code}): ${error.message ?? 'unknown error'}';
       });
     } catch (_) {
       if (!mounted || !_tracking.isTracking) {
@@ -1804,7 +1806,8 @@ class _ScenarioPageState extends State<ScenarioPage>
       }
       setState(() {
         _gpsState.lastRawGpsReadError = 'unexpected read failure';
-        _tracking.status = 'Unable to read GPS signal. Move outdoors and try again.';
+        _tracking.status =
+            'Unable to read GPS signal. Move outdoors and try again.';
       });
     }
   }
@@ -1832,9 +1835,12 @@ class _ScenarioPageState extends State<ScenarioPage>
       fix,
       _sites,
     );
-    final bool goodAccuracy = fix.accuracyMeters <= AppConstants.maxAccuracyMeters;
-    final bool lowSpeed = fix.speedMetersPerSecond <= AppConstants.maxSpeedForDwell;
-    final double effectiveRadius = _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
+    final bool goodAccuracy =
+        fix.accuracyMeters <= AppConstants.maxAccuracyMeters;
+    final bool lowSpeed =
+        fix.speedMetersPerSecond <= AppConstants.maxSpeedForDwell;
+    final double effectiveRadius =
+        _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
     final bool inGeofence = nearest.distanceMeters <= effectiveRadius;
 
     setState(() {
@@ -1935,7 +1941,9 @@ class _ScenarioPageState extends State<ScenarioPage>
   /// Returns 0 if currently outside geofence or not tracking.
   double _liveTimeInGeofenceMinutes(JobSite site) {
     final double base = _timeInGeofenceMinutesBySite[site.address] ?? 0;
-    if (!_tracking.isTracking || _tracking.lastFixAt == null || _gpsState.currentFix == null) {
+    if (!_tracking.isTracking ||
+        _tracking.lastFixAt == null ||
+        _gpsState.currentFix == null) {
       return base;
     }
 
@@ -1952,12 +1960,14 @@ class _ScenarioPageState extends State<ScenarioPage>
       site.lat,
       site.lng,
     );
-    final double effectiveRadius = _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
+    final double effectiveRadius =
+        _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
     if (distance > effectiveRadius) {
       return 0;
     }
 
-    final double elapsedMinutes = _minutesSince(_tracking.lastFixAt!, DateTime.now());
+    final double elapsedMinutes =
+        _minutesSince(_tracking.lastFixAt!, DateTime.now());
     return base + elapsedMinutes;
   }
 
@@ -1971,7 +1981,8 @@ class _ScenarioPageState extends State<ScenarioPage>
     });
     _tracking.promptTimer?.cancel();
     unawaited(_showLogReminderNotification(site, _geofence.promptCountdown));
-    _tracking.promptTimer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
+    _tracking.promptTimer =
+        Timer.periodic(const Duration(seconds: 1), (Timer timer) {
       if (!mounted) {
         timer.cancel();
         return;
@@ -2037,8 +2048,10 @@ class _ScenarioPageState extends State<ScenarioPage>
           orElse: () => null,
         );
     if (latestForSite != null) {
-      final double minutesSinceLast = _minutesSince(latestForSite.timestamp, now);
-      final double effectiveRadius = _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
+      final double minutesSinceLast =
+          _minutesSince(latestForSite.timestamp, now);
+      final double effectiveRadius =
+          _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
       final double distance = LocationTrackingCalculator.distanceMetersBetween(
         fix.lat,
         fix.lng,
@@ -2046,13 +2059,13 @@ class _ScenarioPageState extends State<ScenarioPage>
         activeSite.lng,
       );
       final bool stillInside = distance <= effectiveRadius;
-      final double retriggerOutsideRadius =
-          effectiveRadius + (fix.accuracyMeters * 0.75 < 25 ? 25 : fix.accuracyMeters * 0.75);
-        final double requiredOutsideDistance =
-          retriggerOutsideRadius > AppConstants.retriggerMinimumOutsideDistanceMeters
-            ? retriggerOutsideRadius
-            : AppConstants.retriggerMinimumOutsideDistanceMeters;
-        final bool confidentlyOutside = distance > requiredOutsideDistance;
+      final double retriggerOutsideRadius = effectiveRadius +
+          (fix.accuracyMeters * 0.75 < 25 ? 25 : fix.accuracyMeters * 0.75);
+      final double requiredOutsideDistance = retriggerOutsideRadius >
+              AppConstants.retriggerMinimumOutsideDistanceMeters
+          ? retriggerOutsideRadius
+          : AppConstants.retriggerMinimumOutsideDistanceMeters;
+      final bool confidentlyOutside = distance > requiredOutsideDistance;
       final bool retriggerWindowElapsed =
           minutesSinceLast >= _outOfGeofenceRetriggerMinutes;
 
@@ -2081,7 +2094,8 @@ class _ScenarioPageState extends State<ScenarioPage>
       activeSite.requiredDwellMinutes.toDouble() - timeInGeofenceAtLog,
     );
     final DateTime lastInGeofenceAt = _tracking.lastFixAt ?? now;
-    final int inGeofenceMillis = max(0.0, (timeInGeofenceAtLog * 60000)).toInt();
+    final int inGeofenceMillis =
+        max(0.0, (timeInGeofenceAtLog * 60000)).toInt();
     final DateTime firstInGeofenceAt =
         lastInGeofenceAt.subtract(Duration(milliseconds: inGeofenceMillis));
 
@@ -2168,12 +2182,14 @@ class _ScenarioPageState extends State<ScenarioPage>
         );
       }
       setState(() {
-        _tracking.status = 'No GPS fix yet. Wait for location before retrigger.';
+        _tracking.status =
+            'No GPS fix yet. Wait for location before retrigger.';
       });
       return;
     }
 
-    final JobSite? site = _geofence.candidateSite ?? _gpsState.latestNearest?.site;
+    final JobSite? site =
+        _geofence.candidateSite ?? _gpsState.latestNearest?.site;
     if (site == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2240,8 +2256,8 @@ class _ScenarioPageState extends State<ScenarioPage>
     return 'Nearest: ${nearest.site.address} | '
         'distance: ${_fmtDist(nearest.distanceMeters)} | '
         'target: ${nearest.site.requiredDwellMinutes} min | '
-      'time in geofence: ${_formatElapsedMinutes(timeInGeofence)} | '
-      'remaining: ${_formatElapsedMinutes(remaining)} | '
+        'time in geofence: ${_formatElapsedMinutes(timeInGeofence)} | '
+        'remaining: ${_formatElapsedMinutes(remaining)} | '
         'accuracy: $accuracyLabel | '
         'motion: ${lowSpeed ? 'stationary' : 'moving'} | '
         'geofence: ${inGeofence ? 'inside' : 'outside'} '
@@ -2392,7 +2408,8 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   bool _hasReachedLocationLimit() {
-    return !_locationLimitUnlocked && _sites.length >= AppConstants.maxSavedLocations;
+    return !_locationLimitUnlocked &&
+        _sites.length >= AppConstants.maxSavedLocations;
   }
 
   String _locationLimitReachedMessage() {
@@ -2630,7 +2647,8 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   Future<void> _onEditLogEntry(int index, JobLog log) async {
-    final String? updatedNotes = await LogEntryActionsController.requestEditedNotes(
+    final String? updatedNotes =
+        await LogEntryActionsController.requestEditedNotes(
       context,
       log: log,
     );
@@ -2736,8 +2754,10 @@ class _ScenarioPageState extends State<ScenarioPage>
       closePollSecondOptions: AppConstants.closePollSecondOptions,
       farPollSecondOptions: AppConstants.farPollSecondOptions,
       farDistanceMeterOptions: AppConstants.farDistanceMeterOptions,
-      inGeofenceDistanceMeterOptions: AppConstants.inGeofenceDistanceMeterOptions,
-      outOfGeofenceRetriggerMinuteOptions: AppConstants.outOfGeofenceRetriggerMinuteOptions,
+      inGeofenceDistanceMeterOptions:
+          AppConstants.inGeofenceDistanceMeterOptions,
+      outOfGeofenceRetriggerMinuteOptions:
+          AppConstants.outOfGeofenceRetriggerMinuteOptions,
       hideNearestWhenFar: _hideNearestWhenFar,
       onClosePollSecondsChanged: (int value) {
         setState(() {

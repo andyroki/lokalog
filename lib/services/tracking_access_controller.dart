@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/lokalog_models.dart';
+import 'location_fix_parser.dart';
 import 'location_permission_service.dart';
 import 'scenario_dialog_service.dart';
 import 'ui_feedback_service.dart';
@@ -134,25 +135,37 @@ class TrackingAccessController {
       if (!context.mounted) {
         return null;
       }
-      final double? lat = (position?['latitude'] as num?)?.toDouble();
-      final double? lng = (position?['longitude'] as num?)?.toDouble();
-      if (lat == null || lng == null) {
+      final ParsedLocationFix parsedFix = LocationFixParser.parse(position);
+      if (!parsedFix.isValid || parsedFix.fix == null) {
         UiFeedbackService.showMessage(
           context,
-          'GPS payload missing latitude or longitude. Please try again.',
+          parsedFix.errorMessage ?? 'GPS payload is invalid. Please try again.',
         );
         return null;
       }
 
-      return LocationFix(
-        lat: lat,
-        lng: lng,
-        accuracyMeters: ((position?['accuracy'] as num?)?.toDouble() ?? 999),
-        speedMetersPerSecond: max(
-          0,
-          ((position?['speed'] as num?)?.toDouble() ?? 0),
-        ),
+      return parsedFix.fix;
+    } on TimeoutException {
+      if (!context.mounted) {
+        return null;
+      }
+      UiFeedbackService.showMessage(
+        context,
+        'GPS read timed out. Move outdoors and try again.',
       );
+      return null;
+    } on PlatformException catch (error) {
+      if (!context.mounted) {
+        return null;
+      }
+      final bool timedOut = error.code == 'LOCATION_TIMEOUT';
+      UiFeedbackService.showMessage(
+        context,
+        timedOut
+            ? 'GPS read timed out. Move outdoors and try again.'
+            : 'Could not get current GPS location (${error.code}). Please try again.',
+      );
+      return null;
     } catch (_) {
       if (!context.mounted) {
         return null;
@@ -194,7 +207,8 @@ class TrackingAccessController {
       if (!context.mounted) {
         return;
       }
-      UiFeedbackService.showMessage(context, 'Could not open Location settings.');
+      UiFeedbackService.showMessage(
+          context, 'Could not open Location settings.');
     }
   }
 
