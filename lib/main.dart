@@ -742,8 +742,8 @@ class _ScenarioPageState extends State<ScenarioPage>
   String _formatMetersOption(int meters) => _fmtDistInt(meters);
 
   /// Determine if should use far polling interval for the nearest logged site.
-  /// Returns true if the nearest site has been logged AND is outside geofence.
-  /// Inside geofence should always use close polling for responsiveness.
+  /// Returns true if the nearest site has been logged AND is currently in geofence.
+  /// This allows power saving after a site is already logged.
   bool _shouldUseFarPollingForNearestLoggedSite(SiteDistance nearest) {
     final LocationFix? fix = _gpsState.currentFix;
     if (fix == null) {
@@ -759,7 +759,7 @@ class _ScenarioPageState extends State<ScenarioPage>
     final double effectiveRadius =
         _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
     final bool nearestInGeofence = nearest.distanceMeters <= effectiveRadius;
-    return !nearestInGeofence;
+    return nearestInGeofence;
   }
 
   int _activePollSeconds() {
@@ -806,7 +806,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       return 'far';
     }
     if (_shouldUseFarPollingForNearestLoggedSite(nearest)) {
-      return 'far (logged and outside geofence)';
+      return 'far (logged in geofence)';
     }
     return 'close';
   }
