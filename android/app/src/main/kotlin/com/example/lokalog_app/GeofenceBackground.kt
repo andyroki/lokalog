@@ -23,9 +23,11 @@ private const val STORE_NAME = "lokalog_store"
 private const val SITES_KEY = "saved_job_sites_v1"
 private const val TRACKING_ENABLED_KEY = "pref_tracking_enabled"
 private const val IN_GEOFENCE_DISTANCE_METERS_KEY = "pref_in_geofence_distance_meters"
+private const val OUT_OF_GEOFENCE_RETRIGGER_MINUTES_KEY = "pref_out_of_geofence_retrigger_minutes"
 private const val BACKGROUND_LOGS_KEY = "background_logs_v1"
 private const val BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY = "background_out_of_geofence_since_v1"
 private const val DEFAULT_GEOFENCE_RADIUS_METERS = 200f
+private const val DEFAULT_OUT_OF_GEOFENCE_RETRIGGER_MINUTES = 20L
 private const val BACKGROUND_LOG_CHANNEL_ID = "lokalog_background_log_channel"
 private const val BACKGROUND_LOG_CHANNEL_NAME = "Background logging"
 private const val BACKGROUND_LOG_NOTIFICATION_BASE_ID = 8400
@@ -122,8 +124,27 @@ object GeofenceBackground {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun appendBackgroundLog(context: Context, site: SavedSite) {
+    fun appendBackgroundLog(context: Context, site: SavedSite): Boolean {
         val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+        val nowMillis = System.currentTimeMillis()
+
+        val retriggerMinutes = resolveOutOfGeofenceRetriggerMinutes(context)
+        val retriggerMillis = retriggerMinutes * 60_000L
+
+        // Background re-log safety:
+        // require explicit EXIT evidence and enough out-of-geofence time before
+        // allowing another DWELL log for the same site.
+        val outMap = JSONObject(
+            prefs.getString(BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY, "{}") ?: "{}"
+        )
+        val outSinceMillis = outMap.optLong(site.address, -1L)
+        if (outSinceMillis <= 0L) {
+            return false
+        }
+        if (nowMillis - outSinceMillis < retriggerMillis) {
+            return false
+        }
+
         val current = JSONArray(prefs.getString(BACKGROUND_LOGS_KEY, "[]") ?: "[]")
         val entry = JSONObject().apply {
             put("name", site.name)
@@ -133,11 +154,17 @@ object GeofenceBackground {
             put("confidence", 100.0)
             put("confirmedByUser", false)
             put("autoLogged", true)
-            put("timestamp", System.currentTimeMillis())
+            put("timestamp", nowMillis)
             put("source", "geofence")
         }
         current.put(entry)
         prefs.edit().putString(BACKGROUND_LOGS_KEY, current.toString()).apply()
+
+        // Consume out-of-geofence evidence after successful re-log.
+        outMap.remove(site.address)
+        prefs.edit().putString(BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY, outMap.toString()).apply()
+
+        return true
     }
 
     fun markBackgroundOutOfGeofenceSince(context: Context, site: SavedSite, nowMillis: Long) {
@@ -216,6 +243,16 @@ object GeofenceBackground {
         val parsed = raw?.toFloatOrNull()
         if (parsed == null || parsed <= 0f) {
             return DEFAULT_GEOFENCE_RADIUS_METERS
+        }
+        return parsed
+    }
+
+    private fun resolveOutOfGeofenceRetriggerMinutes(context: Context): Long {
+        val prefs = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(OUT_OF_GEOFENCE_RETRIGGER_MINUTES_KEY, null)
+        val parsed = raw?.toLongOrNull()
+        if (parsed == null || parsed <= 0L) {
+            return DEFAULT_OUT_OF_GEOFENCE_RETRIGGER_MINUTES
         }
         return parsed
     }
@@ -305,9 +342,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
 
             if (transition == Geofence.GEOFENCE_TRANSITION_DWELL) {
-                GeofenceBackground.clearBackgroundOutOfGeofenceSince(context, site)
-                GeofenceBackground.appendBackgroundLog(context, site)
-                GeofenceBackground.showBackgroundLogNotification(context, site)
+                val appended = GeofenceBackground.appendBackgroundLog(context, site)
+                if (appended) {
+                    GeofenceBackground.showBackgroundLogNotification(context, site)
+                }
             }
         }
     }

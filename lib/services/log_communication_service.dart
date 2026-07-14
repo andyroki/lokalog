@@ -10,12 +10,34 @@ class LogCommunicationService {
   ) {
     final String clientName = log.name.trim().isEmpty ? 'Client' : log.name;
     final String notesLine =
-        log.notes.trim().isEmpty ? '' : 'Notes: ${log.notes.trim()}\n';
+      log.notes.trim().isEmpty ? 'Notes: none\n' : 'Notes: ${log.notes.trim()}\n';
+    final String firstInGeofenceLine = log.firstInGeofenceAt == null
+      ? 'First in geofence: n/a\n'
+      : 'First in geofence: ${formatLogTimestamp(log.firstInGeofenceAt!)}\n';
+    final String lastInGeofenceLine = log.lastInGeofenceAt == null
+      ? 'Last in geofence: n/a\n'
+      : 'Last in geofence: ${formatLogTimestamp(log.lastInGeofenceAt!)}\n';
+    final String timeInGeofenceLine = log.timeInGeofenceMinutesAtLog == null
+      ? 'Time in geofence at log: n/a\n'
+      : 'Time in geofence at log: ${log.timeInGeofenceMinutesAtLog!.toStringAsFixed(1)} min\n';
+    final String timeRemainingLine = log.timeRemainingMinutesAtLog == null
+      ? 'Time remaining at log: n/a\n'
+      : 'Time remaining at log: ${log.timeRemainingMinutesAtLog!.toStringAsFixed(1)} min\n';
+
     return 'Lokalog Job Log\n'
         'Customer: $clientName\n'
         'Address: ${log.address}\n'
         'Time: ${formatLogTimestamp(log.timestamp)}\n'
+        'Latitude: ${log.lat.toStringAsFixed(6)}\n'
+        'Longitude: ${log.lng.toStringAsFixed(6)}\n'
         'Confidence: ${log.confidence.toStringAsFixed(1)}%\n'
+        'Confirmed by user: ${log.confirmedByUser}\n'
+        'Auto-logged: ${log.autoLogged}\n'
+        'Calendar added: ${log.calendarAdded}\n'
+        '$firstInGeofenceLine'
+        '$lastInGeofenceLine'
+        '$timeInGeofenceLine'
+        '$timeRemainingLine'
         '$notesLine'
         'Type: ${log.confirmedByUser ? 'confirmed' : 'auto-logged'}';
   }
@@ -85,10 +107,16 @@ class LogCommunicationService {
       );
       return true;
     } on MissingPluginException {
+      if (!context.mounted) {
+        return false;
+      }
       _showSnack(
           context, 'Calendar add is currently supported on Android only.');
       return false;
     } on PlatformException catch (error) {
+      if (!context.mounted) {
+        return false;
+      }
       if (error.code == 'CALENDAR_UNAVAILABLE') {
         _showSnack(context, 'No calendar app found on this device.');
       } else {
@@ -96,6 +124,9 @@ class LogCommunicationService {
       }
       return false;
     } catch (_) {
+      if (!context.mounted) {
+        return false;
+      }
       _showSnack(context, 'Could not open calendar app.');
       return false;
     }
@@ -116,10 +147,19 @@ class LogCommunicationService {
         },
       );
     } on MissingPluginException {
+      if (!context.mounted) {
+        return;
+      }
       _showSnack(context, 'Share is currently supported on Android only.');
     } on PlatformException {
+      if (!context.mounted) {
+        return;
+      }
       _showSnack(context, 'Could not open share sheet.');
     } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
       _showSnack(context, 'Could not open share sheet.');
     }
   }

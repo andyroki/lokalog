@@ -1,22 +1,29 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'constants/app_constants.dart';
+import 'controllers/app_preferences_manager.dart';
+import 'models/geofence_location_state.dart';
+import 'models/gps_fix_state.dart';
 import 'models/lokalog_models.dart';
+import 'models/tracking_state.dart';
 import 'services/battery_usage_service.dart';
+import 'services/geofence_calculator.dart';
+import 'services/log_entry_actions_controller.dart';
 import 'services/location_permission_service.dart';
 import 'services/log_communication_service.dart';
-import 'services/location_geocoding_service.dart';
+import 'services/location_add_workflow_controller.dart';
 import 'services/location_tracking_calculator.dart';
 import 'services/scenario_dialog_service.dart';
 import 'services/scenario_preferences_service.dart';
 import 'services/scenario_state_controller.dart';
+import 'services/tracking_access_controller.dart';
 import 'services/tracking_controller.dart';
-import 'widgets/add_location_sheet.dart';
+import 'services/ui_feedback_service.dart';
 import 'widgets/debug_screen_view.dart';
 import 'widgets/log_screen_view.dart';
 import 'widgets/locations_screen_view.dart';
@@ -223,130 +230,78 @@ class _ScenarioPageState extends State<ScenarioPage>
     with WidgetsBindingObserver {
   static const MethodChannel _locationChannel =
       MethodChannel('lokalog/location');
-  static const String _debugModePreferenceKey = 'pref_debug_mode';
-  static const String _showBatteryInfoPreferenceKey =
-      'pref_show_battery_info_debug';
-  static const String _closePollSecondsPreferenceKey = 'pref_close_poll_secs';
-  static const String _farPollSecondsPreferenceKey = 'pref_far_poll_secs';
-  static const String _farDistanceMetersPreferenceKey =
-      'pref_far_distance_meters';
-    static const String _inGeofenceDistanceMetersPreferenceKey =
-      'pref_in_geofence_distance_meters';
-  static const String _hideNearestWhenFarPreferenceKey =
-      'pref_hide_nearest_when_far';
-  static const String _outOfGeofenceRetriggerMinutesPreferenceKey =
-      'pref_out_of_geofence_retrigger_minutes';
-  static const String _useMetricPreferenceKey = 'pref_use_metric';
-  static const String _trackingEnabledPreferenceKey = 'pref_tracking_enabled';
-  static const String _trackingRuntimeStatePreferenceKey =
-      'pref_tracking_runtime_state_v1';
-  static const String _locationLimitUnlockedPreferenceKey =
-      'pref_location_limit_unlocked';
-  static const String _locationLimitUnlockCode = 'arokicki';
-  static const List<int> _closePollSecondOptions = <int>[30, 60, 300];
-  static const List<int> _farPollSecondOptions = <int>[60, 300, 600];
-  static const List<int> _farDistanceMeterOptions = <int>[
-    300,
-    1000,
-    2000,
-    3000,
-    5000
-  ];
-  static const List<int> _inGeofenceDistanceMeterOptions = <int>[
-    50,
-    100,
-    150,
-    200,
-    300,
-  ];
-  static const List<int> _outOfGeofenceRetriggerMinuteOptions = <int>[
-    1,
-    20,
-    45,
-    60
-  ];
-  static const int _defaultClosePollSeconds = 30;
-  static const int _defaultFarPollSeconds = 300;
-  static const int _defaultFarDistanceMeters = 3000;
-  static const int _defaultInGeofenceDistanceMeters = 200;
-  static const int _defaultOutOfGeofenceRetriggerMinutes = 20;
-  static const Duration _gpsReadTimeout = Duration(seconds: 20);
-  static const int _maxSavedLocations = 5;
-  static const int _requiredStableSamples = 3;
-  static const int _duplicateLogGuardMinutes = 2;
-  static const double _maxAccuracyMeters = 50;
-  static const double _maxSpeedForDwell = 1.2;
-  static const List<int> _logMinuteOptions = <int>[
-    1,
-    5,
-    10,
-    15,
-    20,
-    30,
-    45,
-    60
-  ];
+  
+  // Storage keys for background log tracking
   static const String _sitesStorageKey = 'saved_job_sites_v1';
   static const String _deletedLogKeysPreferenceKey =
       'deleted_background_log_keys_v1';
   static const String _calendarAddedLogKeysPreferenceKey =
       'calendar_added_log_keys_v1';
 
+  // New controllers and managers
+  late AppPreferencesManager _prefsManager;
+  late GeofenceCalculator _geofenceCalc;
+
   final ScenarioStateController _state = ScenarioStateController();
+  
+  // Grouped state objects for better organization
+  late TrackingState _tracking;
+  late GeofenceLocationState _geofence;
+  late GPSFixState _gpsState;
+  
+  // Background log tracking load flags
   bool _deletedLogKeysLoaded = false;
   bool _calendarAddedLogKeysLoaded = false;
+  
+  // Startup and lifecycle flags (continued)
+  int _selectedTabIndex = 0;
+  bool _isChangingTrackingState = false;
+  bool _isFetchingCurrentLocation = false;
+  bool _backgroundLocationPermissionGranted = false;
+
+  // Startup and lifecycle flags
   bool _autoStartTrackingAttempted = false;
   bool _trackingOffStartupDialogShown = false;
   bool _trackingPreferenceLoaded = false;
   bool _trackingRuntimeStateLoaded = false;
   bool _sitesLoaded = false;
-  bool _trackingEnabledPreference = true;
-  bool _locationLimitUnlocked = false;
 
-  Timer? _trackingTimer;
-  Timer? _promptTimer;
-  Timer? _uiRefreshTimer;
-
-  LocationFix? _currentFix;
-  String _status = 'Open Settings to start tracking.';
-  int _stableSamples = 0;
-  bool _isTracking = false;
-  int _selectedTabIndex = 0;
-  bool _debugModeEnabled = false;
-  bool _showBatteryInfo = true;
-  int _closePollSeconds = _defaultClosePollSeconds;
-  int _farPollSeconds = _defaultFarPollSeconds;
-  int _farDistanceMeters = _defaultFarDistanceMeters;
-  int _inGeofenceDistanceMeters = _defaultInGeofenceDistanceMeters;
-  int _outOfGeofenceRetriggerMinutes = _defaultOutOfGeofenceRetriggerMinutes;
-  bool _hideNearestWhenFar = true;
-  bool _useMetric = true;
-  bool _isChangingTrackingState = false;
-  bool _isFetchingCurrentLocation = false;
-  bool _backgroundLocationPermissionGranted = false;
-  DateTime? _lastFixAt;
-  Map<Object?, Object?>? _lastRawGpsPayload;
-  DateTime? _lastRawGpsPayloadAt;
-  String? _lastRawGpsReadError;
-  SiteDistance? _latestNearest;
-
-  JobSite? _candidateSite;
-  JobSite? _pendingSite;
-  int _promptCountdown = 0;
-
+  // Battery usage display
   bool _isLoadingBatteryUsage = false;
   bool _usageAccessGranted = false;
+  String? _batteryUsageError;
+  int? _deviceBatteryLevel;
+  DateTime? _batteryUsageFetchedAt;
+  List<DebugBatteryAppUsage> _batteryUsage = <DebugBatteryAppUsage>[];
+
+  // App version info
   static const String _fallbackVersion =
       String.fromEnvironment('APP_VERSION', defaultValue: '1.0.1');
   static const String _fallbackBuildNumber =
       String.fromEnvironment('APP_BUILD_NUMBER', defaultValue: '3');
   String _appVersionLabel = '$_fallbackVersion ($_fallbackBuildNumber)';
-  String? _batteryUsageError;
-  int? _deviceBatteryLevel;
-  DateTime? _batteryUsageFetchedAt;
-  DateTime? _trackingRuntimeStateLoadedAt;
-  DateTime? _trackingRuntimeStateSavedAt;
-  List<DebugBatteryAppUsage> _batteryUsage = <DebugBatteryAppUsage>[];
+
+  // Preference values (loaded via _prefsManager)
+  bool _debugModeEnabled = false;
+  bool _showBatteryInfo = true;
+  int _closePollSeconds = AppConstants.closePollSeconds;
+  int _farPollSeconds = AppConstants.farPollSeconds;
+  int _farDistanceMeters = AppConstants.farDistanceMeters;
+  int _inGeofenceDistanceMeters = AppConstants.inGeofenceDistanceMeters;
+  int _outOfGeofenceRetriggerMinutes = AppConstants.outOfGeofenceRetriggerMinutes;
+  bool _hideNearestWhenFar = true;
+  bool _useMetric = true;
+  bool _trackingEnabledPreference = true;
+  bool _locationLimitUnlocked = false;
+
+  // Geofence and logging state - now using GeofenceLocationState
+  final double _maxAccuracyMeters = AppConstants.maxAccuracyMeters;
+  final double _maxSpeedForDwell = AppConstants.maxSpeedForDwell;
+  final int _requiredStableSamples = AppConstants.requiredStableSamples;
+  final List<int> _logMinuteOptions = AppConstants.logMinuteOptions;
+
+  // Preference keys
+  static const String _debugModePreferenceKey = 'debug_mode_enabled';
 
   List<JobSite> get _sites => _state.sites;
   List<JobLog> get _logs => _state.logs;
@@ -361,7 +316,25 @@ class _ScenarioPageState extends State<ScenarioPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    
+    // Initialize grouped state objects
+    _tracking = TrackingState();
+    _geofence = GeofenceLocationState();
+    _gpsState = GPSFixState();
+    
+    // Initialize managers
+    _prefsManager = AppPreferencesManager(_locationChannel);
+    _geofenceCalc = GeofenceCalculator(
+      inGeofenceDistanceMeters: _inGeofenceDistanceMeters.toDouble(),
+    );
+    
     _initializeAppVersionLabel();
+    _initializeManagers();
+  }
+
+  /// Initializes preference and state managers on app startup.
+  /// Loads all persisted preferences asynchronously without blocking UI.
+  Future<void> _initializeManagers() async {
     unawaited(_loadDebugMode());
     unawaited(_loadPollingPreferences());
     unawaited(_loadUnitPreference());
@@ -371,6 +344,10 @@ class _ScenarioPageState extends State<ScenarioPage>
     unawaited(_loadTrackingRuntimeState());
     unawaited(_loadSites());
   }
+
+  // ============================================================================
+  // LIFECYCLE & PERMISSIONS: App startup, permissions, and location services
+  // ============================================================================
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -385,6 +362,53 @@ class _ScenarioPageState extends State<ScenarioPage>
       unawaited(_loadBackgroundLogs());
     }
   }
+
+  // ============================================================================
+  // GROUPED STATE ACCESSORS: Provide DebugMixin access to grouped state objects
+  // ============================================================================
+
+  bool get isTracking => _tracking.isTracking;
+
+  String get status => _tracking.status;
+
+  int get stableSamples => _tracking.stableSamples;
+
+  DateTime? get lastFixAt => _tracking.lastFixAt;
+
+  DateTime? get trackingRuntimeStateLoadedAt => _tracking.trackingRuntimeStateLoadedAt;
+
+  DateTime? get trackingRuntimeStateSavedAt => _tracking.trackingRuntimeStateSavedAt;
+
+  LocationFix? get currentFix => _gpsState.currentFix;
+
+  SiteDistance? get latestNearest => _gpsState.latestNearest;
+
+  Map<Object?, Object?>? get lastRawGpsPayload => _gpsState.lastRawGpsPayload;
+
+  DateTime? get lastRawGpsPayloadAt => _gpsState.lastRawGpsPayloadAt;
+
+  String? get lastRawGpsReadError => _gpsState.lastRawGpsReadError;
+
+  JobSite? get candidateSite => _geofence.candidateSite;
+
+  JobSite? get pendingSite => _geofence.pendingSite;
+
+  int get promptCountdown => _geofence.promptCountdown;
+
+  int get requiredStableSamples => _requiredStableSamples;
+
+  int get closePollSeconds => _closePollSeconds;
+
+  int get farPollSeconds => _farPollSeconds;
+
+  Map<String, double> get timeInGeofenceMinutesBySite =>
+      _state.timeInGeofenceMinutes;
+
+  Map<String, DateTime> get outOfGeofenceSince => _state.outOfGeofenceSince;
+
+  // ============================================================================
+  // PREFERENCES: Loading and saving user preferences
+  // ============================================================================
 
   Future<void> _refreshBackgroundLocationPermissionStatus() async {
     if (!Platform.isAndroid) {
@@ -414,6 +438,10 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
     await _clearBackgroundGeofences();
   }
+
+  // ============================================================================
+  // ANDROID INTEGRATION: Geofence sync and native platform channel calls
+  // ============================================================================
 
   Future<void> _syncBackgroundGeofences() async {
     try {
@@ -451,42 +479,29 @@ class _ScenarioPageState extends State<ScenarioPage>
         '$_fallbackVersion ($_fallbackBuildNumber) | Built: ${stampParts.join(' ')}';
   }
 
+  /// Load tracking enabled preference and sync geofences accordingly.
+  /// When preference loads, background geofences are synced if enabled,
+  /// or cleared if disabled. Auto-start is triggered if conditions are met.
   Future<void> _loadTrackingPreference() async {
-    try {
-      final bool? enabled = await ScenarioPreferencesService.loadBoolPreference(
-        _locationChannel,
-        key: _trackingEnabledPreferenceKey,
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _trackingEnabledPreference = enabled ?? true;
-        _trackingPreferenceLoaded = true;
-      });
-      if (_trackingEnabledPreference) {
-        await _syncBackgroundGeofences();
-      } else {
-        await _clearBackgroundGeofences();
-      }
-    } catch (_) {
+    final bool enabled = await _prefsManager.loadTrackingEnabled();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _trackingEnabledPreference = enabled;
       _trackingPreferenceLoaded = true;
+    });
+    if (_trackingEnabledPreference) {
+      await _syncBackgroundGeofences();
+    } else {
+      await _clearBackgroundGeofences();
     }
     _maybeAutoStartTracking();
   }
 
   Future<void> _saveTrackingPreference(bool enabled) async {
     _trackingEnabledPreference = enabled;
-    try {
-      await ScenarioPreferencesService.saveBoolPreference(
-        _locationChannel,
-        key: _trackingEnabledPreferenceKey,
-        value: enabled,
-      );
-    } catch (_) {
-      // Keep local preference value if persistence fails.
-    }
-
+    await _prefsManager.saveTrackingEnabled(enabled);
     if (enabled) {
       await _syncBackgroundGeofences();
     } else {
@@ -495,87 +510,52 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   Future<void> _loadTrackingRuntimeState() async {
-    try {
-      final String? raw = await ScenarioPreferencesService.loadStringPreference(
-        _locationChannel,
-        key: _trackingRuntimeStatePreferenceKey,
-      );
+    final Map<String, dynamic>? state =
+        await _prefsManager.loadTrackingRuntimeState();
 
-      if (raw != null && raw.trim().isNotEmpty) {
-        final dynamic decoded = jsonDecode(raw);
-        if (decoded is Map<String, dynamic>) {
-          _state.restoreTrackingRuntimeStateFromJson(decoded);
-          if (mounted) {
-            setState(() {
-              _trackingRuntimeStateLoaded = true;
-              _trackingRuntimeStateLoadedAt = DateTime.now();
-            });
-          } else {
-            _trackingRuntimeStateLoaded = true;
-            _trackingRuntimeStateLoadedAt = DateTime.now();
-          }
-          _maybeAutoStartTracking();
-          return;
-        }
+    if (state != null && state.isNotEmpty) {
+      _state.restoreTrackingRuntimeStateFromJson(state);
+      if (mounted) {
+        setState(() {
+          _trackingRuntimeStateLoaded = true;
+          _tracking.trackingRuntimeStateLoadedAt = DateTime.now();
+        });
+      } else {
+        _trackingRuntimeStateLoaded = true;
+        _tracking.trackingRuntimeStateLoadedAt = DateTime.now();
       }
-    } catch (_) {
-      // Keep best-effort behavior when runtime state cannot be restored.
+      _maybeAutoStartTracking();
+      return;
     }
 
     _trackingRuntimeStateLoaded = true;
-    _trackingRuntimeStateLoadedAt = DateTime.now();
+    _tracking.trackingRuntimeStateLoadedAt = DateTime.now();
     _maybeAutoStartTracking();
   }
 
   Future<void> _saveTrackingRuntimeState() async {
-    try {
-      final Map<String, dynamic> payload =
-          _state.buildTrackingRuntimeStatePayload();
-
-      await ScenarioPreferencesService.saveStringPreference(
-        _locationChannel,
-        key: _trackingRuntimeStatePreferenceKey,
-        value: jsonEncode(payload),
-      );
-      _trackingRuntimeStateSavedAt = DateTime.now();
-    } catch (_) {
-      // Keep runtime behavior even if persistence fails.
-    }
+    final Map<String, dynamic> payload =
+        _state.buildTrackingRuntimeStatePayload();
+    await _prefsManager.saveTrackingRuntimeState(payload);
+    _tracking.trackingRuntimeStateSavedAt = DateTime.now();
   }
 
   Future<void> _loadDebugMode() async {
-    try {
-      final DebugPreferences prefs =
-          await ScenarioPreferencesService.loadDebugPreferences(
-        _locationChannel,
-        debugModeKey: _debugModePreferenceKey,
-        showBatteryInfoKey: _showBatteryInfoPreferenceKey,
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _debugModeEnabled = prefs.debugModeEnabled;
-        _showBatteryInfo = prefs.showBatteryInfo;
-      });
-    } catch (_) {
-      // Keep default if load fails.
+    final DebugPreferences prefs = await _prefsManager.loadDebugPreferences();
+    if (!mounted) {
+      return;
     }
+    setState(() {
+      _debugModeEnabled = prefs.debugModeEnabled;
+      _showBatteryInfo = prefs.showBatteryInfo;
+    });
   }
 
   Future<void> _setShowBatteryInfo(bool enabled) async {
     setState(() {
       _showBatteryInfo = enabled;
     });
-    try {
-      await ScenarioPreferencesService.saveBoolPreference(
-        _locationChannel,
-        key: _showBatteryInfoPreferenceKey,
-        value: enabled,
-      );
-    } catch (_) {
-      // Keep local toggle behavior even if persistence fails.
-    }
+    await _prefsManager.setShowBatteryInfo(enabled);
 
     if (enabled &&
         _batteryUsage.isEmpty &&
@@ -585,145 +565,77 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
   }
 
+  /// Load polling preferences and reinitialize geofence calculator.
+  /// Updates all polling intervals and recreates calculator with new radius.
   Future<void> _loadPollingPreferences() async {
-    try {
-      final PollingPreferences prefs =
-          await ScenarioPreferencesService.loadPollingPreferences(
-        _locationChannel,
-        closePollSecondsKey: _closePollSecondsPreferenceKey,
-        farPollSecondsKey: _farPollSecondsPreferenceKey,
-        farDistanceMetersKey: _farDistanceMetersPreferenceKey,
-        inGeofenceDistanceMetersKey: _inGeofenceDistanceMetersPreferenceKey,
-        outOfGeofenceRetriggerMinutesKey:
-            _outOfGeofenceRetriggerMinutesPreferenceKey,
-        hideNearestWhenFarKey: _hideNearestWhenFarPreferenceKey,
-        defaultClosePollSeconds: _defaultClosePollSeconds,
-        defaultFarPollSeconds: _defaultFarPollSeconds,
-        defaultFarDistanceMeters: _defaultFarDistanceMeters,
-        defaultInGeofenceDistanceMeters: _defaultInGeofenceDistanceMeters,
-        defaultOutOfGeofenceRetriggerMinutes:
-            _defaultOutOfGeofenceRetriggerMinutes,
-        closePollSecondOptions: _closePollSecondOptions,
-        farPollSecondOptions: _farPollSecondOptions,
-        farDistanceMeterOptions: _farDistanceMeterOptions,
-        inGeofenceDistanceMeterOptions: _inGeofenceDistanceMeterOptions,
-        outOfGeofenceRetriggerMinuteOptions:
-            _outOfGeofenceRetriggerMinuteOptions,
-      );
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _closePollSeconds = prefs.closePollSeconds;
-        _farPollSeconds = prefs.farPollSeconds;
-        _farDistanceMeters = prefs.farDistanceMeters;
-        _inGeofenceDistanceMeters = prefs.inGeofenceDistanceMeters;
-        _outOfGeofenceRetriggerMinutes = prefs.outOfGeofenceRetriggerMinutes;
-        _hideNearestWhenFar = prefs.hideNearestWhenFar;
-      });
-    } catch (_) {
-      // Keep defaults if preference load fails.
+    final PollingPreferences prefs =
+        await _prefsManager.loadPollingPreferences();
+    if (!mounted) {
+      return;
     }
+    setState(() {
+      _closePollSeconds = prefs.closePollSeconds;
+      _farPollSeconds = prefs.farPollSeconds;
+      _farDistanceMeters = prefs.farDistanceMeters;
+      _inGeofenceDistanceMeters = prefs.inGeofenceDistanceMeters;
+      _outOfGeofenceRetriggerMinutes = prefs.outOfGeofenceRetriggerMinutes;
+      _hideNearestWhenFar = prefs.hideNearestWhenFar;
+      // Reinitialize geofence calculator with new parameters
+      _geofenceCalc = GeofenceCalculator(
+        inGeofenceDistanceMeters: _inGeofenceDistanceMeters.toDouble(),
+      );
+    });
   }
 
   Future<void> _savePollingPreferences() async {
-    try {
-      await ScenarioPreferencesService.savePollingPreferences(
-        _locationChannel,
-        closePollSecondsKey: _closePollSecondsPreferenceKey,
-        closePollSeconds: _closePollSeconds,
-        farPollSecondsKey: _farPollSecondsPreferenceKey,
-        farPollSeconds: _farPollSeconds,
-        farDistanceMetersKey: _farDistanceMetersPreferenceKey,
-        farDistanceMeters: _farDistanceMeters,
-        inGeofenceDistanceMetersKey: _inGeofenceDistanceMetersPreferenceKey,
-        inGeofenceDistanceMeters: _inGeofenceDistanceMeters,
-        outOfGeofenceRetriggerMinutesKey:
-            _outOfGeofenceRetriggerMinutesPreferenceKey,
-        outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
-        hideNearestWhenFarKey: _hideNearestWhenFarPreferenceKey,
-        hideNearestWhenFar: _hideNearestWhenFar,
-      );
-    } catch (_) {
-      // Keep active runtime values even if persistence fails.
-    }
+    final prefs = PollingPreferences(
+      closePollSeconds: _closePollSeconds,
+      farPollSeconds: _farPollSeconds,
+      farDistanceMeters: _farDistanceMeters,
+      inGeofenceDistanceMeters: _inGeofenceDistanceMeters,
+      outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
+      hideNearestWhenFar: _hideNearestWhenFar,
+    );
+    await _prefsManager.savePollingPreferences(prefs);
   }
 
   Future<void> _loadUnitPreference() async {
-    try {
-      final bool? useMetric =
-          await ScenarioPreferencesService.loadBoolPreference(
-        _locationChannel,
-        key: _useMetricPreferenceKey,
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _useMetric = useMetric ?? true;
-      });
-    } catch (_) {
-      // Keep default (metric) if load fails.
+    final bool useMetric = await _prefsManager.loadUseMetric();
+    if (!mounted) {
+      return;
     }
+    setState(() {
+      _useMetric = useMetric;
+    });
   }
 
   Future<void> _saveUnitPreference() async {
-    try {
-      await ScenarioPreferencesService.saveBoolPreference(
-        _locationChannel,
-        key: _useMetricPreferenceKey,
-        value: _useMetric,
-      );
-    } catch (_) {
-      // Keep local value even if persistence fails.
-    }
+    await _prefsManager.saveUseMetric(_useMetric);
   }
 
   Future<void> _loadLocationLimitUnlockedPreference() async {
-    try {
-      final bool? unlocked =
-          await ScenarioPreferencesService.loadBoolPreference(
-        _locationChannel,
-        key: _locationLimitUnlockedPreferenceKey,
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _locationLimitUnlocked = unlocked ?? false;
-      });
-    } catch (_) {
-      // Keep locked by default when preference storage is unavailable.
+    final bool unlocked = await _prefsManager.loadLocationLimitUnlocked();
+    if (!mounted) {
+      return;
     }
+    setState(() {
+      _locationLimitUnlocked = unlocked;
+    });
   }
 
   Future<void> _saveLocationLimitUnlockedPreference() async {
-    try {
-      await ScenarioPreferencesService.saveBoolPreference(
-        _locationChannel,
-        key: _locationLimitUnlockedPreferenceKey,
-        value: _locationLimitUnlocked,
-      );
-    } catch (_) {
-      // Keep local unlock state if persistence fails.
-    }
+    await _prefsManager.saveLocationLimitUnlocked(_locationLimitUnlocked);
   }
 
   void _onLocationUnlockCodeSubmitted(String rawCode) {
     final String code = rawCode.trim().toLowerCase();
-    if (code != _locationLimitUnlockCode) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unlock code is not valid.')),
-      );
+    if (code != AppConstants.locationLimitUnlockCode) {
+      _showInfoSnackBar('Unlock code is not valid.');
       return;
     }
 
     if (_locationLimitUnlocked) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location limit is already unlocked.')),
-      );
+      _showInfoSnackBar('Location limit is already unlocked.');
       return;
     }
 
@@ -732,12 +644,12 @@ class _ScenarioPageState extends State<ScenarioPage>
     });
     unawaited(_saveLocationLimitUnlockedPreference());
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Location limit unlocked. You can now add more than 5.'),
-      ),
-    );
+    _showInfoSnackBar('Location limit unlocked. You can now add more than 5.');
   }
+
+  // ============================================================================
+  // FORMATTING & DISPLAY: Format values for UI display
+  // ============================================================================
 
   /// Format a metre value for display using current unit setting.
   String _fmtDist(double meters, {int decimals = 1}) {
@@ -765,17 +677,52 @@ class _ScenarioPageState extends State<ScenarioPage>
     return '${feet.toStringAsFixed(0)} ft';
   }
 
-  /// Format a speed value (m/s) for display using current unit setting.
-  String _fmtSpeed(double metersPerSecond) {
-    if (_useMetric) {
-      return '${metersPerSecond.toStringAsFixed(1)} m/s';
-    }
-    final double mph = metersPerSecond * 2.23694;
-    return '${mph.toStringAsFixed(1)} mph';
-  }
-
   /// Format an accuracy value (metres) for display.
   String _fmtAccuracy(double meters) => _fmtDist(meters);
+
+  // ============================================================================
+  // HELPER METHODS: Common Patterns & Calculations
+  // ============================================================================
+
+  /// Calculate minutes elapsed between two timestamps.
+  /// Returns positive minutes even if end is before start.
+  double _minutesSince(DateTime start, DateTime end) =>
+      max(0, end.difference(start).inMilliseconds / 60000);
+
+  void _setTrackingToggleBusy(bool isBusy) {
+    if (!mounted) {
+      _isChangingTrackingState = isBusy;
+      return;
+    }
+    setState(() {
+      _isChangingTrackingState = isBusy;
+    });
+  }
+
+  void _showInfoSnackBar(String message) {
+    UiFeedbackService.showMessage(context, message);
+  }
+
+  /// Reject a log attempt with consistent pattern: update status, dismiss prompt, save state.
+  void _rejectLogWithStatus(String reason) {
+    setState(() {
+      _geofence.dismissPrompt();
+      _tracking.status = reason;
+    });
+    unawaited(_cancelLogReminderNotification());
+    unawaited(_saveTrackingRuntimeState());
+  }
+
+  /// Find a site in the current site list by its address.
+  /// Returns the site if found, otherwise returns the original site.
+  JobSite _findSiteByAddress(JobSite site) {
+    for (final JobSite savedSite in _sites) {
+      if (savedSite.address == site.address) {
+        return savedSite;
+      }
+    }
+    return site;
+  }
 
   String _formatSecondsOption(int seconds) {
     if (seconds >= 60) {
@@ -787,8 +734,11 @@ class _ScenarioPageState extends State<ScenarioPage>
 
   String _formatMetersOption(int meters) => _fmtDistInt(meters);
 
+  /// Determine if should use far polling interval for the nearest logged site.
+  /// Returns true if the nearest site has been logged AND is currently in geofence.
+  /// This prevents rapid re-logging by keeping close polling active after a log.
   bool _shouldUseFarPollingForNearestLoggedSite(SiteDistance nearest) {
-    final LocationFix? fix = _currentFix;
+    final LocationFix? fix = _gpsState.currentFix;
     if (fix == null) {
       return false;
     }
@@ -799,20 +749,17 @@ class _ScenarioPageState extends State<ScenarioPage>
       return false;
     }
 
-      final double effectiveRadius = max(
-        _inGeofenceDistanceMeters.toDouble(),
-        min(_inGeofenceDistanceMeters + 80.0, fix.accuracyMeters + 35),
-    );
+    final double effectiveRadius = _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
     final bool nearestInGeofence = nearest.distanceMeters <= effectiveRadius;
     return nearestInGeofence;
   }
 
   int _activePollSeconds() {
-    if (_currentFix == null || _sites.isEmpty) {
+    if (_gpsState.currentFix == null || _sites.isEmpty) {
       return _closePollSeconds;
     }
     final SiteDistance nearest = LocationTrackingCalculator.findNearestSite(
-      _currentFix!,
+      _gpsState.currentFix!,
       _sites,
     );
     if (nearest.distanceMeters > _farDistanceMeters ||
@@ -822,24 +769,29 @@ class _ScenarioPageState extends State<ScenarioPage>
     return _closePollSeconds;
   }
 
+  /// Calculate adaptive required stable samples based on current poll interval.
+  /// Longer poll intervals need fewer samples to prevent excessive dwell time.
+  /// Example: With 5-min polls, one stable sample is enough; with 30-sec polls, need 3.
   int _effectiveRequiredStableSamples() {
     final int activePollSeconds = _activePollSeconds();
-    // Prevent long poll intervals from doubling/ tripling practical dwell time.
     if (activePollSeconds >= 300) {
+      // 5+ minute poll: one sample is enough
       return 1;
     }
     if (activePollSeconds >= 120) {
+      // 2+ minute poll: two samples
       return 2;
     }
-    return _requiredStableSamples;
+    // Close polling (30-60s): require full samples
+    return AppConstants.requiredStableSamples;
   }
 
   String _pollingModeSummary() {
-    if (_currentFix == null || _sites.isEmpty) {
+    if (_gpsState.currentFix == null || _sites.isEmpty) {
       return 'close';
     }
     final SiteDistance nearest = LocationTrackingCalculator.findNearestSite(
-      _currentFix!,
+      _gpsState.currentFix!,
       _sites,
     );
     if (nearest.distanceMeters > _farDistanceMeters) {
@@ -852,12 +804,12 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   String _pollingDebugSummary() {
-    if (_isTracking) {
+    if (_tracking.isTracking) {
       return 'Position polling: ${_formatSecondsOption(_activePollSeconds())} (${_pollingModeSummary()} mode).';
     }
 
     if (_trackingEnabledPreference) {
-      return 'Position polling should be active, but it is not currently running. Current status: $_status';
+      return 'Position polling should be active, but it is not currently running. Current status: ${_tracking.status}';
     }
 
     return 'Position polling is inactive. Close: ${_formatSecondsOption(_closePollSeconds)}, Far: ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.';
@@ -866,13 +818,13 @@ class _ScenarioPageState extends State<ScenarioPage>
   List<LocationTrackingState> _buildLocationTrackingStates() {
     return LocationTrackingCalculator.buildLocationTrackingStates(
       sites: _sites,
-      fix: _currentFix,
+      fix: _gpsState.currentFix,
       farDistanceMeters: _farDistanceMeters,
       matchRadiusMeters: _inGeofenceDistanceMeters.toDouble(),
       timeInGeofenceMinutes: _projectedTimeInGeofenceMinutesBySite(),
       sessionLoggedAddresses: _sessionLoggedAddresses,
-      pendingSite: _pendingSite,
-      candidateSite: _candidateSite,
+      pendingSite: _geofence.pendingSite,
+      candidateSite: _geofence.candidateSite,
       now: DateTime.now(),
     );
   }
@@ -897,13 +849,8 @@ class _ScenarioPageState extends State<ScenarioPage>
     if (outSince == null) {
       return 0;
     }
-    return min(
-      24 * 60,
-      max(
-        0,
-        now.difference(outSince).inMilliseconds / 60000,
-      ),
-    );
+    // Cap at 24 hours to prevent unreasonable values
+    return min(24 * 60, _minutesSince(outSince, now));
   }
 
   String _locationTrackingStatesDebugSummary() {
@@ -954,15 +901,15 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   String _rawGpsDebugSummary() {
-    final String readAt = _lastRawGpsPayloadAt == null
+    final String readAt = _gpsState.lastRawGpsPayloadAt == null
         ? 'No payload received yet'
-        : _formatDebugTimestamp(_lastRawGpsPayloadAt!);
+        : _formatDebugTimestamp(_gpsState.lastRawGpsPayloadAt!);
 
-    final String errorLine = _lastRawGpsReadError == null
+    final String errorLine = _gpsState.lastRawGpsReadError == null
         ? 'Last read error: none'
-        : 'Last read error: $_lastRawGpsReadError';
+        : 'Last read error: ${_gpsState.lastRawGpsReadError}';
 
-    final Map<Object?, Object?>? payload = _lastRawGpsPayload;
+    final Map<Object?, Object?>? payload = _gpsState.lastRawGpsPayload;
     if (payload == null || payload.isEmpty) {
       return 'Raw GPS Data\nLast payload: $readAt\n$errorLine\nPayload: empty';
     }
@@ -988,12 +935,12 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   String _trackingRuntimeStateDebugSummary() {
-    final String restored = _trackingRuntimeStateLoadedAt == null
+    final String restored = _tracking.trackingRuntimeStateLoadedAt == null
         ? 'Not restored yet'
-      : _formatDebugTimestamp(_trackingRuntimeStateLoadedAt!);
-    final String saved = _trackingRuntimeStateSavedAt == null
+        : _formatDebugTimestamp(_tracking.trackingRuntimeStateLoadedAt!);
+    final String saved = _tracking.trackingRuntimeStateSavedAt == null
         ? 'No save in this app session yet'
-      : _formatDebugTimestamp(_trackingRuntimeStateSavedAt!);
+        : _formatDebugTimestamp(_tracking.trackingRuntimeStateSavedAt!);
 
     return 'Runtime timing state\n'
         'Restored: $restored\n'
@@ -1004,23 +951,23 @@ class _ScenarioPageState extends State<ScenarioPage>
 
   String _appReadinessDebugSummary() {
     final String lastFix =
-        _lastFixAt == null ? 'none' : _formatDebugTimestamp(_lastFixAt!);
+        _tracking.lastFixAt == null ? 'none' : _formatDebugTimestamp(_tracking.lastFixAt!);
 
     return 'App readiness\n'
-        'Tracking running: $_isTracking\n'
+        'Tracking running: ${_tracking.isTracking}\n'
         'Tracking preference enabled: $_trackingEnabledPreference\n'
         'Loaded flags: trackingPref=$_trackingPreferenceLoaded, runtimeState=$_trackingRuntimeStateLoaded, sites=$_sitesLoaded\n'
         'Auto-start attempted: $_autoStartTrackingAttempted\n'
         'Changing tracking state: $_isChangingTrackingState\n'
         'Fetching current location: $_isFetchingCurrentLocation\n'
-        'Timers active: poll=${_trackingTimer != null}, prompt=${_promptTimer != null}\n'
+        'Timers active: poll=${_tracking.trackingTimer != null}, prompt=${_tracking.promptTimer != null}\n'
         'Last accepted fix: $lastFix\n'
         'Sites: ${_sites.length}, Logs: ${_logs.length}, Deleted log keys: ${_deletedLogKeys.length}';
   }
 
   String _geofenceDecisionDebugSummary() {
-    final LocationFix? fix = _currentFix;
-    final SiteDistance? nearest = _latestNearest;
+    final LocationFix? fix = _gpsState.currentFix;
+    final SiteDistance? nearest = _gpsState.latestNearest;
     final String nearestLine = nearest == null
         ? 'Nearest: unavailable'
         : 'Nearest: ${nearest.site.name} @ ${_fmtDist(nearest.distanceMeters)}';
@@ -1029,16 +976,16 @@ class _ScenarioPageState extends State<ScenarioPage>
         ? 'Fix: unavailable'
         : 'Fix: acc=${_fmtAccuracy(fix.accuracyMeters)}, speed=${fix.speedMetersPerSecond.toStringAsFixed(2)} m/s';
 
-    final String pending = _pendingSite?.name ?? 'none';
-    final String candidate = _candidateSite?.name ?? 'none';
+    final String pending = _geofence.pendingSite?.name ?? 'none';
+    final String candidate = _geofence.candidateSite?.name ?? 'none';
 
     return 'Geofence decision snapshot\n'
         '$nearestLine\n'
         '$fixLine\n'
-        'Stable samples: $_stableSamples / $_requiredStableSamples\n'
+        'Stable samples: ${_tracking.stableSamples} / ${AppConstants.requiredStableSamples}\n'
         'Effective stable requirement now: ${_effectiveRequiredStableSamples()}\n'
         'Candidate: $candidate\n'
-        'Pending prompt: $pending (countdown: $_promptCountdown s)\n'
+        'Pending prompt: $pending (countdown: ${_geofence.promptCountdown} s)\n'
         'Out-of-geofence timers: ${_outOfGeofenceSince.length}';
   }
 
@@ -1047,10 +994,10 @@ class _ScenarioPageState extends State<ScenarioPage>
     final bool startupReady = _trackingPreferenceLoaded &&
         _trackingRuntimeStateLoaded &&
         _sitesLoaded;
-    final String lastFixAge = _lastFixAt == null
+    final String lastFixAge = _tracking.lastFixAt == null
         ? 'n/a'
-        : '${now.difference(_lastFixAt!).inSeconds}s ago';
-    final SiteDistance? nearest = _latestNearest;
+        : '${now.difference(_tracking.lastFixAt!).inSeconds}s ago';
+    final SiteDistance? nearest = _gpsState.latestNearest;
     final JobSite? nearestSite = nearest?.site;
     final String nearestDistance =
         nearest == null ? 'n/a' : _fmtDist(nearest.distanceMeters);
@@ -1063,12 +1010,59 @@ class _ScenarioPageState extends State<ScenarioPage>
       final double outMinutes = _liveOutOfGeofenceMinutes(nearestSite, now);
       final bool logged = _sessionLoggedAddresses.contains(address);
       final DateTime? outSince = _outOfGeofenceSince[address];
+      final JobLog? latestLogForSite = _logs.cast<JobLog?>().firstWhere(
+        (JobLog? log) => log?.address == address,
+        orElse: () => null,
+        );
+      final double? lastLogAgeMinutes = latestLogForSite == null
+        ? null
+        : _minutesSince(latestLogForSite.timestamp, now);
+      final bool retriggerWindowElapsed =
+        lastLogAgeMinutes != null &&
+        lastLogAgeMinutes >= _outOfGeofenceRetriggerMinutes;
+
+      final LocationFix? fix = _gpsState.currentFix;
+      final double? effectiveRadius = fix == null
+        ? null
+        : _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
+      final double? currentDistance = nearest?.distanceMeters;
+      final double outsideBuffer = fix == null
+        ? 0
+        : (fix.accuracyMeters * 0.75 < 25
+          ? 25
+          : fix.accuracyMeters * 0.75);
+      final double? retriggerOutsideThreshold =
+        effectiveRadius == null ? null : effectiveRadius + outsideBuffer;
+      final double requiredOutsideDistance = retriggerOutsideThreshold == null
+          ? AppConstants.retriggerMinimumOutsideDistanceMeters
+          : (retriggerOutsideThreshold >
+                  AppConstants.retriggerMinimumOutsideDistanceMeters
+              ? retriggerOutsideThreshold
+              : AppConstants.retriggerMinimumOutsideDistanceMeters);
+      final bool stillInside = currentDistance != null &&
+        effectiveRadius != null &&
+        currentDistance <= effectiveRadius;
+      final bool confidentlyOutside = currentDistance != null &&
+        currentDistance > requiredOutsideDistance;
+      final bool retriggerEligible =
+        confidentlyOutside && retriggerWindowElapsed;
+
+      final String lastLogAgeLine = lastLogAgeMinutes == null
+        ? 'n/a'
+        : _formatElapsedMinutes(lastLogAgeMinutes);
+      final String outsideThresholdLine = _fmtDist(requiredOutsideDistance);
 
       nearestBlock = 'Nearest logging diagnostics\n'
           'Site: ${nearestSite.name}\n'
           'Address: $address\n'
           'Distance: $nearestDistance\n'
           'Logged this session: $logged\n'
+        'Last log age: $lastLogAgeLine\n'
+        'Still inside geofence: $stillInside\n'
+        'Outside threshold: $outsideThresholdLine\n'
+        'Confidently outside: $confidentlyOutside\n'
+        'Retrigger window elapsed (${_outOfGeofenceRetriggerMinutes}m): $retriggerWindowElapsed\n'
+        'Retrigger eligible now: $retriggerEligible\n'
           'Required dwell: ${nearestSite.requiredDwellMinutes}m\n'
           'Base dwell map: ${_formatElapsedMinutes(baseDwell)}\n'
           'Projected dwell: ${_formatElapsedMinutes(projectedDwell)}\n'
@@ -1084,14 +1078,14 @@ class _ScenarioPageState extends State<ScenarioPage>
         'Auto-start attempted: $_autoStartTrackingAttempted\n'
         'Tracking-off dialog shown: $_trackingOffStartupDialogShown\n'
         'Tracking enabled pref: $_trackingEnabledPreference\n'
-        'Tracking active: $_isTracking\n'
+        'Tracking active: ${_tracking.isTracking}\n'
         'Last fix age: $lastFixAge\n'
-        'Current status: $_status\n'
-        'Candidate site: ${_candidateSite?.name ?? 'none'}\n'
-        'Pending prompt site: ${_pendingSite?.name ?? 'none'}\n'
-        'Stable samples: $_stableSamples/$_requiredStableSamples\n'
+        'Current status: ${_tracking.status}\n'
+        'Candidate site: ${_geofence.candidateSite?.name ?? 'none'}\n'
+        'Pending prompt site: ${_geofence.pendingSite?.name ?? 'none'}\n'
+        'Stable samples: ${_tracking.stableSamples}/$_requiredStableSamples\n'
         'Effective stable requirement now: ${_effectiveRequiredStableSamples()}\n'
-        'Prompt countdown: ${_promptCountdown}s\n'
+        'Prompt countdown: ${_geofence.promptCountdown}s\n'
         'Close/Far polling sec: $_closePollSeconds/$_farPollSeconds\n\n'
         '$nearestBlock';
   }
@@ -1100,36 +1094,40 @@ class _ScenarioPageState extends State<ScenarioPage>
     return _hideNearestWhenFar && nearest.distanceMeters > _farDistanceMeters;
   }
 
+  // ============================================================================
+  // GPS POLLING: Schedule, poll, and process location updates
+  // ============================================================================
+
   Future<void> _pollAndReschedule() async {
-    if (!_isTracking) {
+    if (!_tracking.isTracking) {
       return;
     }
     await _pollCurrentLocation();
-    if (!_isTracking) {
+    if (!_tracking.isTracking) {
       return;
     }
     _scheduleNextPoll();
   }
 
   void _scheduleNextPoll({bool immediate = false}) {
-    if (!_isTracking) {
+    if (!_tracking.isTracking) {
       return;
     }
-    _trackingTimer?.cancel();
+    _tracking.trackingTimer?.cancel();
     if (immediate) {
       unawaited(_pollAndReschedule());
       return;
     }
-    _trackingTimer = Timer(
+    _tracking.trackingTimer = Timer(
       Duration(seconds: _activePollSeconds()),
       () => unawaited(_pollAndReschedule()),
     );
   }
 
   void _startLiveUiTicker() {
-    _uiRefreshTimer?.cancel();
-    _uiRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted || !_isTracking) {
+    _tracking.uiRefreshTimer?.cancel();
+    _tracking.uiRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || !_tracking.isTracking) {
         return;
       }
       setState(() {
@@ -1172,6 +1170,10 @@ class _ScenarioPageState extends State<ScenarioPage>
       ),
     ];
   }
+
+  // ============================================================================
+  // DATA LOADING & STORAGE: Load sites, logs, and runtime state from persistence
+  // ============================================================================
 
   Future<void> _loadSites() async {
     try {
@@ -1267,7 +1269,7 @@ class _ScenarioPageState extends State<ScenarioPage>
     if (_trackingEnabledPreference) {
       await _startScenario();
     }
-    if (!mounted || _isTracking || _trackingOffStartupDialogShown) {
+    if (!mounted || _tracking.isTracking || _trackingOffStartupDialogShown) {
       return;
     }
     _trackingOffStartupDialogShown = true;
@@ -1321,12 +1323,13 @@ class _ScenarioPageState extends State<ScenarioPage>
         _batteryUsageError = 'Could not load app battery usage.';
       });
     } finally {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
+      if (mounted) {
+        setState(() {
+          _isLoadingBatteryUsage = false;
+        });
+      } else {
         _isLoadingBatteryUsage = false;
-      });
+      }
     }
   }
 
@@ -1363,6 +1366,9 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
   }
 
+  /// Load logs from background polling when app resumes.
+  /// Loads background logs (tracked by native code), merged log keys, calendar keys,
+  /// and out-of-geofence timers. Called on app resume and after permissions granted.
   Future<void> _loadBackgroundLogs() async {
     try {
       await _ensureDeletedLogKeysLoaded();
@@ -1419,7 +1425,7 @@ class _ScenarioPageState extends State<ScenarioPage>
                 ? lastInGeofenceAt.subtract(
                     Duration(
                       milliseconds:
-                          max(0, (inferredTimeInAtLog * 60000).round()),
+                          (inferredTimeInAtLog * 60000).round().toInt(),
                     ),
                   )
                 : DateTime.fromMillisecondsSinceEpoch(parsedFirstInMillis);
@@ -1471,10 +1477,9 @@ class _ScenarioPageState extends State<ScenarioPage>
       setState(() {
         _state.mergeLoadedLogs(loadedLogs);
         _sessionLoggedAddresses.addAll(loggedAddresses);
-        if (_pendingSite != null &&
-            loggedAddresses.contains(_pendingSite!.address)) {
-          _pendingSite = null;
-          _promptCountdown = 0;
+        if (_geofence.pendingSite != null &&
+            loggedAddresses.contains(_geofence.pendingSite!.address)) {
+          _geofence.dismissPrompt();
         }
       });
     } catch (_) {
@@ -1624,12 +1629,14 @@ class _ScenarioPageState extends State<ScenarioPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_saveTrackingRuntimeState());
-    _trackingTimer?.cancel();
-    _promptTimer?.cancel();
-    _uiRefreshTimer?.cancel();
+    _tracking.trackingTimer?.cancel();
+    _tracking.promptTimer?.cancel();
+    _tracking.uiRefreshTimer?.cancel();
     super.dispose();
   }
 
+  /// Start GPS tracking: ensure permissions, initialize state, schedule first poll.
+  /// Resets session state (candidate site, prompt state) but preserves persisted runtime state.
   Future<void> _startScenario() async {
     final bool hasLocationAccess = await _ensureLocationAccess();
     if (!hasLocationAccess || !mounted) {
@@ -1637,15 +1644,13 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
 
     // Resume persisted runtime timing state instead of resetting on restart.
-    _stableSamples = 0;
-    _candidateSite = null;
-    _pendingSite = null;
-    _latestNearest = null;
-    _promptCountdown = 0;
-    _lastFixAt = null;
-    _promptTimer?.cancel();
-    _isTracking = true;
-    _status = _sites.isEmpty
+    _tracking.stableSamples = 0;
+    _geofence.clear();
+    _gpsState.latestNearest = null;
+    _tracking.lastFixAt = null;
+    _tracking.promptTimer?.cancel();
+    _tracking.isTracking = true;
+    _tracking.status = _sites.isEmpty
         ? 'Tracking started. No locations configured yet. Add locations from the Locations tab.'
         : 'Tracking started. Reading live GPS signal...';
 
@@ -1660,34 +1665,19 @@ class _ScenarioPageState extends State<ScenarioPage>
       return;
     }
 
-    setState(() {
-      _isChangingTrackingState = true;
-    });
-
-    if (enabled) {
-      try {
+    _setTrackingToggleBusy(true);
+    try {
+      if (enabled) {
         await _saveTrackingPreference(true);
         await _startScenario();
 
-        if (!_isTracking && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not start tracking: $_status')),
-          );
+        if (!_tracking.isTracking) {
+          _showInfoSnackBar('Could not start tracking: ${_tracking.status}');
         }
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isChangingTrackingState = false;
-          });
-        } else {
-          _isChangingTrackingState = false;
-        }
+        return;
       }
-      return;
-    }
 
-    try {
-      if (!_isTracking) {
+      if (!_tracking.isTracking) {
         await _saveTrackingPreference(false);
         return;
       }
@@ -1699,119 +1689,41 @@ class _ScenarioPageState extends State<ScenarioPage>
         await _saveTrackingPreference(false);
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _isChangingTrackingState = false;
-        });
-      } else {
-        _isChangingTrackingState = false;
-      }
+      _setTrackingToggleBusy(false);
     }
   }
 
   Future<bool> _ensureLocationAccess() async {
-    if (!Platform.isAndroid) {
-      setState(() {
-        _status = 'Native GPS is implemented for Android in this build.';
-      });
-      return false;
-    }
-
-    final LocationPermissionStatus permissionStatus =
-        await LocationPermissionService.getPermissionStatus(_locationChannel);
-
-    if (!permissionStatus.serviceEnabled) {
-      setState(() {
-        _status = 'Location services are off. Turn on GPS and try again.';
-      });
-      final bool shouldOpen =
-          await ScenarioDialogService.showGoToSettingsDialog(
-        context,
-        title: 'Location Services Off',
-        message: 'GPS is turned off. Open Location settings now?',
-      );
-      if (shouldOpen) {
-        await _openLocationSettings();
-      }
-      return false;
-    }
-
-    if (!permissionStatus.foregroundPermissionGranted) {
-      setState(() {
-        _status =
-            'Location permission denied. Allow location access to start tracking.';
-      });
-      final bool shouldOpen =
-          await ScenarioDialogService.showGoToSettingsDialog(
-        context,
-        title: 'Location Permission Needed',
-        message:
-            'Location permission is required. Open app permission settings now?',
-      );
-      if (shouldOpen) {
-        await _openAppSettings();
-      }
-      return false;
-    }
-
-    final bool backgroundGranted =
-        permissionStatus.backgroundPermissionGranted;
-    if (mounted) {
-      setState(() {
-        _backgroundLocationPermissionGranted = backgroundGranted;
-      });
-    }
-    if (!backgroundGranted) {
-      setState(() {
-        _status =
-            'For app-closed geofencing, set Location permission to "Allow all the time" in Android settings.';
-      });
-      final bool shouldOpen =
-          await ScenarioDialogService.showGoToSettingsDialog(
-        context,
-        title: 'Background Location Needed',
-        message:
-            'To log when the app is closed, set Location to "Allow all the time". Open app settings now?',
-      );
-      if (shouldOpen) {
-        await _openAppSettings();
-      }
-      return false;
-    }
-
-    if (!permissionStatus.notificationPermissionGranted) {
-      setState(() {
-        _status =
-            'Notification permission is required for reminder alerts while running in the background.';
-      });
-      final bool shouldOpen =
-          await ScenarioDialogService.showGoToSettingsDialog(
-        context,
-        title: 'Notifications Needed',
-        message:
-            'Enable notifications so log reminders can show while the app runs in the background. Open app settings now?',
-      );
-      if (shouldOpen) {
-        await _openAppSettings();
-      }
-      return false;
-    }
-
-    await _syncBackgroundGeofences();
-
-    return true;
+    return TrackingAccessController.ensureTrackingAccess(
+      context: context,
+      channel: _locationChannel,
+      syncBackgroundGeofences: _syncBackgroundGeofences,
+      setStatus: (String status) {
+        if (!mounted) {
+          _tracking.status = status;
+          return;
+        }
+        setState(() {
+          _tracking.status = status;
+        });
+      },
+      setBackgroundPermissionGranted: (bool granted) {
+        if (!mounted) {
+          _backgroundLocationPermissionGranted = granted;
+          return;
+        }
+        setState(() {
+          _backgroundLocationPermissionGranted = granted;
+        });
+      },
+    );
   }
 
   Future<void> _openLocationSettings() async {
     try {
       await LocationPermissionService.openLocationSettings(_locationChannel);
     } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open Location settings.')),
-      );
+      _showInfoSnackBar('Could not open Location settings.');
     }
   }
 
@@ -1819,17 +1731,14 @@ class _ScenarioPageState extends State<ScenarioPage>
     try {
       await LocationPermissionService.openAppSettings(_locationChannel);
     } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open App settings.')),
-      );
+      _showInfoSnackBar('Could not open App settings.');
     }
   }
 
+  /// Poll current GPS location from platform and process the fix.
+  /// Handles timeout and platform exceptions gracefully, updating status appropriately.
   Future<void> _pollCurrentLocation() async {
-    if (!_isTracking) {
+    if (!_tracking.isTracking) {
       return;
     }
 
@@ -1838,24 +1747,24 @@ class _ScenarioPageState extends State<ScenarioPage>
           .invokeMethod<Map<Object?, Object?>>(
             'getCurrentLocation',
           )
-          .timeout(_gpsReadTimeout);
+          .timeout(AppConstants.gpsReadTimeout);
 
-      if (!_isTracking || !mounted) {
+      if (!_tracking.isTracking || !mounted) {
         return;
       }
 
       setState(() {
-        _lastRawGpsPayload =
+        _gpsState.lastRawGpsPayload =
             position == null ? null : Map<Object?, Object?>.from(position);
-        _lastRawGpsPayloadAt = DateTime.now();
-        _lastRawGpsReadError = null;
+        _gpsState.lastRawGpsPayloadAt = DateTime.now();
+        _gpsState.lastRawGpsReadError = null;
       });
 
       final double? lat = (position?['latitude'] as num?)?.toDouble();
       final double? lng = (position?['longitude'] as num?)?.toDouble();
       if (lat == null || lng == null) {
         setState(() {
-          _status = 'GPS payload missing latitude or longitude.';
+          _tracking.status = 'GPS payload missing latitude or longitude.';
         });
         return;
       }
@@ -1871,54 +1780,50 @@ class _ScenarioPageState extends State<ScenarioPage>
       );
       _processFix(fix);
     } on TimeoutException {
-      if (!mounted || !_isTracking) {
+      if (!mounted || !_tracking.isTracking) {
         return;
       }
       setState(() {
-        _lastRawGpsReadError = 'timeout after ${_gpsReadTimeout.inSeconds}s';
-        _status =
+        _gpsState.lastRawGpsReadError = 'timeout after ${AppConstants.gpsReadTimeout.inSeconds}s';
+        _tracking.status =
             'GPS read timed out. Move outdoors for clearer sky view and try again.';
       });
     } on PlatformException catch (error) {
-      if (!mounted || !_isTracking) {
+      if (!mounted || !_tracking.isTracking) {
         return;
       }
       setState(() {
-        _lastRawGpsReadError =
+        _gpsState.lastRawGpsReadError =
             '${error.code}: ${error.message ?? 'unknown error'}';
-        _status =
+        _tracking.status =
             'GPS error (${error.code}): ${error.message ?? 'unknown error'}';
       });
     } catch (_) {
-      if (!mounted || !_isTracking) {
+      if (!mounted || !_tracking.isTracking) {
         return;
       }
       setState(() {
-        _lastRawGpsReadError = 'unexpected read failure';
-        _status = 'Unable to read GPS signal. Move outdoors and try again.';
+        _gpsState.lastRawGpsReadError = 'unexpected read failure';
+        _tracking.status = 'Unable to read GPS signal. Move outdoors and try again.';
       });
     }
   }
 
+  /// Stop GPS tracking: cancel all timers, clear pending prompts, and save state.
   void _stopScenario() {
-    _trackingTimer?.cancel();
-    _trackingTimer = null;
-    _promptTimer?.cancel();
-    _uiRefreshTimer?.cancel();
-    _uiRefreshTimer = null;
+    _tracking.cancelAllTimers();
     unawaited(_cancelLogReminderNotification());
     unawaited(_clearBackgroundGeofences());
     setState(() {
-      _isTracking = false;
-      _pendingSite = null;
-      _promptCountdown = 0;
-      _status = 'Tracking stopped.';
+      _tracking.isTracking = false;
+      _geofence.dismissPrompt();
+      _tracking.status = 'Tracking stopped.';
     });
     unawaited(_saveTrackingRuntimeState());
   }
 
   void _refreshNearestUiFromCurrentFix() {
-    final LocationFix? fix = _currentFix;
+    final LocationFix? fix = _gpsState.currentFix;
     if (!mounted || fix == null || _sites.isEmpty) {
       return;
     }
@@ -1927,17 +1832,14 @@ class _ScenarioPageState extends State<ScenarioPage>
       fix,
       _sites,
     );
-    final bool goodAccuracy = fix.accuracyMeters <= _maxAccuracyMeters;
-    final bool lowSpeed = fix.speedMetersPerSecond <= _maxSpeedForDwell;
-    final double effectiveRadius = max(
-      _inGeofenceDistanceMeters.toDouble(),
-      min(_inGeofenceDistanceMeters + 80.0, fix.accuracyMeters + 35),
-    );
+    final bool goodAccuracy = fix.accuracyMeters <= AppConstants.maxAccuracyMeters;
+    final bool lowSpeed = fix.speedMetersPerSecond <= AppConstants.maxSpeedForDwell;
+    final double effectiveRadius = _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
     final bool inGeofence = nearest.distanceMeters <= effectiveRadius;
 
     setState(() {
-      _latestNearest = nearest;
-      _status = _buildStatusText(
+      _gpsState.latestNearest = nearest;
+      _tracking.status = _buildStatusText(
         nearest: nearest,
         goodAccuracy: goodAccuracy,
         lowSpeed: lowSpeed,
@@ -1953,23 +1855,26 @@ class _ScenarioPageState extends State<ScenarioPage>
     _state.pruneTrackingStateToKnownSites();
 
     if (_sites.isEmpty) {
-      _latestNearest = null;
+      _gpsState.latestNearest = null;
     } else {
       _refreshNearestUiFromCurrentFix();
     }
 
-    if (_isTracking) {
+    if (_tracking.isTracking) {
       _scheduleNextPoll(immediate: true);
     }
     unawaited(_saveTrackingRuntimeState());
   }
 
+  /// Process a new GPS fix: update state, check for geofence entry, and handle prompts.
+  /// Delegates core geofence logic to TrackingController, then updates UI and decides
+  /// whether to show confirmation prompt for logging.
   void _processFix(LocationFix fix) {
     final DateTime now = DateTime.now();
     final TrackingProcessResult result = TrackingController.processFix(
       fix: fix,
       now: now,
-      lastFixAt: _lastFixAt,
+      lastFixAt: _tracking.lastFixAt,
       sites: _sites,
       sessionLoggedAddresses: _sessionLoggedAddresses,
       timeInGeofenceMinutes: _timeInGeofenceMinutesBySite,
@@ -1979,27 +1884,27 @@ class _ScenarioPageState extends State<ScenarioPage>
       maxAccuracyMeters: _maxAccuracyMeters,
       maxSpeedForDwell: _maxSpeedForDwell,
       requiredStableSamples: _effectiveRequiredStableSamples(),
-      currentCandidateSite: _candidateSite,
-      currentStableSamples: _stableSamples,
-      pendingSite: _pendingSite,
+      currentCandidateSite: _geofence.candidateSite,
+      currentStableSamples: _tracking.stableSamples,
+      pendingSite: _geofence.pendingSite,
     );
-    _lastFixAt = now;
+    _tracking.lastFixAt = now;
 
     if (_sites.isEmpty) {
       setState(() {
-        _currentFix = result.currentFix;
-        _candidateSite = result.candidateSite;
-        _stableSamples = result.stableSamples;
+        _gpsState.currentFix = result.currentFix;
+        _geofence.candidateSite = result.candidateSite;
+        _tracking.stableSamples = result.stableSamples;
       });
       return;
     }
 
     setState(() {
-      _currentFix = result.currentFix;
-      _candidateSite = result.candidateSite;
-      _stableSamples = result.stableSamples;
-      _latestNearest = result.latestNearest;
-      _status = _buildStatusText(
+      _gpsState.currentFix = result.currentFix;
+      _geofence.candidateSite = result.candidateSite;
+      _tracking.stableSamples = result.stableSamples;
+      _gpsState.latestNearest = result.latestNearest;
+      _tracking.status = _buildStatusText(
         nearest: result.latestNearest!,
         goodAccuracy: result.goodAccuracy,
         lowSpeed: result.lowSpeed,
@@ -2015,139 +1920,125 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
   }
 
+  // ============================================================================
+  // LOGGING & GEOFENCE: Time calculations, prompt management, and job logging
+  // ============================================================================
+
   double _minutesRemainingToLog(JobSite site) {
     final double required = site.requiredDwellMinutes.toDouble();
     final double liveTimeInGeofence = _liveTimeInGeofenceMinutes(site);
     return max(0, required - liveTimeInGeofence);
   }
 
+  /// Calculate live time spent in geofence for a site.
+  /// Includes base accumulated time plus ongoing time since last GPS fix.
+  /// Returns 0 if currently outside geofence or not tracking.
   double _liveTimeInGeofenceMinutes(JobSite site) {
     final double base = _timeInGeofenceMinutesBySite[site.address] ?? 0;
-    if (!_isTracking || _lastFixAt == null || _currentFix == null) {
+    if (!_tracking.isTracking || _tracking.lastFixAt == null || _gpsState.currentFix == null) {
       return base;
     }
 
-    final LocationFix fix = _currentFix!;
+    final LocationFix fix = _gpsState.currentFix!;
+    final bool goodAccuracy = fix.accuracyMeters <= _maxAccuracyMeters;
+    final bool lowSpeed = fix.speedMetersPerSecond <= _maxSpeedForDwell;
+    if (!goodAccuracy || !lowSpeed) {
+      return base;
+    }
+
     final double distance = LocationTrackingCalculator.distanceMetersBetween(
       fix.lat,
       fix.lng,
       site.lat,
       site.lng,
     );
-    final double effectiveRadius = max(
-      _inGeofenceDistanceMeters.toDouble(),
-      min(_inGeofenceDistanceMeters + 80.0, fix.accuracyMeters + 35),
-    );
+    final double effectiveRadius = _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
     if (distance > effectiveRadius) {
       return 0;
     }
 
-    final double elapsedMinutes =
-        DateTime.now().difference(_lastFixAt!).inMilliseconds / 60000;
-    if (elapsedMinutes <= 0) {
-      return base;
-    }
+    final double elapsedMinutes = _minutesSince(_tracking.lastFixAt!, DateTime.now());
     return base + elapsedMinutes;
   }
 
+  // ============================================================================
+  // UI & NOTIFICATIONS: Prompts, dialogs, and notification management
+  // ============================================================================
+
   void _showConfirmationPrompt(JobSite site) {
     setState(() {
-      _pendingSite = site;
-      _promptCountdown = 12;
+      _geofence.setPending(site, 12);
     });
-    _promptTimer?.cancel();
-    unawaited(_showLogReminderNotification(site, _promptCountdown));
-    _promptTimer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
+    _tracking.promptTimer?.cancel();
+    unawaited(_showLogReminderNotification(site, _geofence.promptCountdown));
+    _tracking.promptTimer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
       if (!mounted) {
         timer.cancel();
         return;
       }
-      if (_pendingSite == null) {
+      if (_geofence.pendingSite == null) {
         timer.cancel();
         return;
       }
-      if (_promptCountdown <= 1) {
+      if (_geofence.promptCountdown <= 1) {
         _logJob(site, confirmedByUser: false, autoLogged: true);
         timer.cancel();
       } else {
         setState(() {
-          _promptCountdown -= 1;
+          _geofence.decrementCountdown();
         });
       }
     });
   }
 
   void _dismissPendingPrompt() {
-    if (_pendingSite == null) {
+    if (_geofence.pendingSite == null) {
       return;
     }
-    _promptTimer?.cancel();
+    _tracking.promptTimer?.cancel();
     unawaited(_cancelLogReminderNotification());
     setState(() {
-      _pendingSite = null;
-      _promptCountdown = 0;
-      _status = 'Log reminder dismissed.';
+      _geofence.dismissPrompt();
+      _tracking.status = 'Log reminder dismissed.';
     });
   }
 
+  /// Log a job at the given site.
+  /// Validates eligibility, prevents duplicates, and records the log entry.
+  /// Rejects with appropriate message if unable to log (already logged, too recent, etc.).
   void _logJob(
     JobSite site, {
     required bool confirmedByUser,
     required bool autoLogged,
     String notes = '',
   }) {
-    final LocationFix? fix = _currentFix;
+    final LocationFix? fix = _gpsState.currentFix;
     if (fix == null) {
       return;
     }
 
-    JobSite activeSite = site;
-    for (final JobSite savedSite in _sites) {
-      if (savedSite.address == site.address) {
-        activeSite = savedSite;
-        break;
-      }
-    }
+    final JobSite activeSite = _findSiteByAddress(site);
+    final DateTime now = DateTime.now();
 
     // Hard guard: a site can log only once per visit.
     // It becomes eligible again only when out-of-geofence retrigger clears
     // sessionLoggedAddresses, or Debug Retrigger explicitly clears it.
     if (_sessionLoggedAddresses.contains(activeSite.address)) {
-      setState(() {
-        _pendingSite = null;
-        _promptCountdown = 0;
-        _status =
-            'Already logged for this visit at ${activeSite.address}. Leave geofence for retrigger timer or use Debug Retrigger.';
-      });
-      unawaited(_cancelLogReminderNotification());
+      _rejectLogWithStatus(
+        'Already logged for this visit at ${activeSite.address}. '
+        'Leave geofence for retrigger timer or use Debug Retrigger.',
+      );
       return;
     }
 
-    final DateTime now = DateTime.now();
+    // Check if there's a recent log (outside retrigger window)
     final JobLog? latestForSite = _logs.cast<JobLog?>().firstWhere(
           (JobLog? log) => log?.address == activeSite.address,
           orElse: () => null,
         );
     if (latestForSite != null) {
-      final double minutesSinceLast =
-          now.difference(latestForSite.timestamp).inMilliseconds / 60000;
-      if (minutesSinceLast < _outOfGeofenceRetriggerMinutes) {
-        setState(() {
-          _sessionLoggedAddresses.add(activeSite.address);
-          _pendingSite = null;
-          _promptCountdown = 0;
-          _status =
-              'Skipped repeat log for ${activeSite.address} (inside cooldown window).';
-        });
-        unawaited(_cancelLogReminderNotification());
-        unawaited(_saveTrackingRuntimeState());
-        return;
-      }
-
-      final double effectiveRadius = max(
-        _inGeofenceDistanceMeters.toDouble(),
-        min(_inGeofenceDistanceMeters + 80.0, fix.accuracyMeters + 35),
-      );
+      final double minutesSinceLast = _minutesSince(latestForSite.timestamp, now);
+      final double effectiveRadius = _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
       final double distance = LocationTrackingCalculator.distanceMetersBetween(
         fix.lat,
         fix.lng,
@@ -2155,29 +2046,42 @@ class _ScenarioPageState extends State<ScenarioPage>
         activeSite.lng,
       );
       final bool stillInside = distance <= effectiveRadius;
+      final double retriggerOutsideRadius =
+          effectiveRadius + (fix.accuracyMeters * 0.75 < 25 ? 25 : fix.accuracyMeters * 0.75);
+        final double requiredOutsideDistance =
+          retriggerOutsideRadius > AppConstants.retriggerMinimumOutsideDistanceMeters
+            ? retriggerOutsideRadius
+            : AppConstants.retriggerMinimumOutsideDistanceMeters;
+        final bool confidentlyOutside = distance > requiredOutsideDistance;
+      final bool retriggerWindowElapsed =
+          minutesSinceLast >= _outOfGeofenceRetriggerMinutes;
 
-      if (stillInside && minutesSinceLast < _duplicateLogGuardMinutes) {
-        setState(() {
-          _sessionLoggedAddresses.add(activeSite.address);
-          _pendingSite = null;
-          _promptCountdown = 0;
-          _status =
-              'Skipped duplicate log for ${activeSite.address} (recent log already recorded).';
-        });
-        unawaited(_cancelLogReminderNotification());
-        unawaited(_saveTrackingRuntimeState());
+      // Prevent repeat logs for the same visit unless the user has clearly
+      // left the geofence and stayed out for the retrigger window.
+      if (stillInside || !confidentlyOutside || !retriggerWindowElapsed) {
+        if (stillInside) {
+          _rejectLogWithStatus(
+            'Skipped repeat log for ${activeSite.address}. Still inside geofence; leave area before logging again.',
+          );
+          return;
+        }
+
+        _rejectLogWithStatus(
+          'Skipped repeat log for ${activeSite.address} (retrigger conditions not met yet).',
+        );
         return;
       }
     }
 
+    // Log is eligible: build and record it
     final String cleanNotes = notes.trim();
     final double timeInGeofenceAtLog = _liveTimeInGeofenceMinutes(activeSite);
     final double timeRemainingAtLog = max(
       0,
       activeSite.requiredDwellMinutes.toDouble() - timeInGeofenceAtLog,
     );
-    final DateTime lastInGeofenceAt = _lastFixAt ?? now;
-    final int inGeofenceMillis = max(0, (timeInGeofenceAtLog * 60000).round());
+    final DateTime lastInGeofenceAt = _tracking.lastFixAt ?? now;
+    final int inGeofenceMillis = max(0.0, (timeInGeofenceAtLog * 60000)).toInt();
     final DateTime firstInGeofenceAt =
         lastInGeofenceAt.subtract(Duration(milliseconds: inGeofenceMillis));
 
@@ -2202,9 +2106,8 @@ class _ScenarioPageState extends State<ScenarioPage>
     setState(() {
       _sessionLoggedAddresses.add(activeSite.address);
       _outOfGeofenceSince.remove(activeSite.address);
-      _pendingSite = null;
-      _promptCountdown = 0;
-      _status = autoLogged
+      _geofence.dismissPrompt();
+      _tracking.status = autoLogged
           ? 'No response received. Job auto-logged for ${activeSite.address}.'
           : 'Job confirmed and logged for ${activeSite.address}.';
     });
@@ -2243,19 +2146,19 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   void _debugRetriggerCurrentSite() {
-    if (_pendingSite != null) {
+    if (_geofence.pendingSite != null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('A log reminder is already active.')),
         );
       }
       setState(() {
-        _status = 'A log reminder is already active.';
+        _tracking.status = 'A log reminder is already active.';
       });
       return;
     }
 
-    final LocationFix? fix = _currentFix;
+    final LocationFix? fix = _gpsState.currentFix;
     if (fix == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2265,12 +2168,12 @@ class _ScenarioPageState extends State<ScenarioPage>
         );
       }
       setState(() {
-        _status = 'No GPS fix yet. Wait for location before retrigger.';
+        _tracking.status = 'No GPS fix yet. Wait for location before retrigger.';
       });
       return;
     }
 
-    final JobSite? site = _candidateSite ?? _latestNearest?.site;
+    final JobSite? site = _geofence.candidateSite ?? _gpsState.latestNearest?.site;
     if (site == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2279,7 +2182,7 @@ class _ScenarioPageState extends State<ScenarioPage>
         );
       }
       setState(() {
-        _status = 'No nearby site available to retrigger.';
+        _tracking.status = 'No nearby site available to retrigger.';
       });
       return;
     }
@@ -2288,9 +2191,9 @@ class _ScenarioPageState extends State<ScenarioPage>
       _sessionLoggedAddresses.remove(site.address);
       _outOfGeofenceSince.remove(site.address);
       _timeInGeofenceMinutesBySite[site.address] = 0;
-      _stableSamples = 0;
-      _candidateSite = site;
-      _status =
+      _tracking.stableSamples = 0;
+      _geofence.candidateSite = site;
+      _tracking.status =
           'Retrigger restarted for ${site.address}. Stay in geofence for ${site.requiredDwellMinutes} min to log again.';
     });
     unawaited(_saveTrackingRuntimeState());
@@ -2305,7 +2208,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       );
     }
 
-    if (_isTracking) {
+    if (_tracking.isTracking) {
       _scheduleNextPoll(immediate: true);
     }
   }
@@ -2410,7 +2313,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   Future<void> _shareLogEntry(JobLog log) async {
-    await LogCommunicationService.shareLogEntry(
+    await LogEntryActionsController.shareLogEntry(
       context: context,
       channel: _locationChannel,
       log: log,
@@ -2419,7 +2322,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   Future<void> _shareAllLogs() async {
-    await LogCommunicationService.shareAllLogs(
+    await LogEntryActionsController.shareAllLogs(
       context: context,
       channel: _locationChannel,
       logs: _logs,
@@ -2428,25 +2331,26 @@ class _ScenarioPageState extends State<ScenarioPage>
   }
 
   Future<void> _addLogToCalendar(JobLog log) async {
-    final bool opened = await LogCommunicationService.addLogToCalendar(
+    await LogEntryActionsController.handleAddLogToCalendar(
       context: context,
       channel: _locationChannel,
       log: log,
+      onCalendarMarked: (String key) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _state.markLogCalendarAdded(log.address, log.timestamp);
+          _state.addCalendarAddedLogKey(key);
+        });
+        unawaited(_saveCalendarAddedLogKeys());
+      },
     );
-    if (!opened || !mounted) {
-      return;
-    }
-    final String key = _logStorageKey(
-      address: log.address,
-      timestampMillis: log.timestamp.millisecondsSinceEpoch,
-    );
-    setState(() {
-      _state.markLogCalendarAdded(log.address, log.timestamp);
-      _state.addCalendarAddedLogKey(key);
-    });
-    unawaited(_saveCalendarAddedLogKeys());
   }
 
+  /// Display countdown notification for pending log confirmation.
+  /// Shows notification with site name, address, and countdown seconds remaining
+  /// before the prompt is automatically dismissed.
   Future<void> _showLogReminderNotification(JobSite site, int countdown) async {
     await LogCommunicationService.showLogReminderNotification(
       channel: _locationChannel,
@@ -2487,20 +2391,16 @@ class _ScenarioPageState extends State<ScenarioPage>
     return Icons.bug_report;
   }
 
-  bool _hasMissingRequiredLocationFields(AddLocationInput input) {
-    return input.name.trim().isEmpty ||
-        input.street.trim().isEmpty ||
-        input.city.trim().isEmpty ||
-        input.state.trim().isEmpty ||
-        input.zip.trim().isEmpty;
-  }
-
   bool _hasReachedLocationLimit() {
-    return !_locationLimitUnlocked && _sites.length >= _maxSavedLocations;
+    return !_locationLimitUnlocked && _sites.length >= AppConstants.maxSavedLocations;
   }
 
   String _locationLimitReachedMessage() {
-    return 'Only $_maxSavedLocations locations are allowed. Enter unlock code in Settings to add more.';
+    return 'Only ${AppConstants.maxSavedLocations} locations are allowed. Enter unlock code in Settings to add more.';
+  }
+
+  void _showLocationLimitReachedSnackBar() {
+    _showInfoSnackBar(_locationLimitReachedMessage());
   }
 
   bool _isDuplicateLocationName(String name, {int? excludingIndex}) {
@@ -2512,176 +2412,39 @@ class _ScenarioPageState extends State<ScenarioPage>
 
   Future<void> _onAddNewLocation() async {
     if (_hasReachedLocationLimit()) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_locationLimitReachedMessage()),
-        ),
-      );
+      _showLocationLimitReachedSnackBar();
       return;
     }
 
-    AddLocationInput? prefill;
-    String? sheetError;
-
-    while (true) {
-      final AddLocationInput? result =
-          await showModalBottomSheet<AddLocationInput>(
-        context: context,
-        isScrollControlled: true,
-        builder: (BuildContext sheetContext) {
-          return AddLocationSheet(
-            title: 'Add New Location',
-            submitLabel: 'Add',
-            logMinuteOptions: _logMinuteOptions,
-            initialInput: prefill,
-            errorMessage: sheetError,
-          );
-        },
-      );
-
-      if (result == null || !mounted) {
-        return;
-      }
-
-      if (_hasMissingRequiredLocationFields(result)) {
-        prefill = result;
-        sheetError = 'Please fill name, street, city, state, and ZIP.';
-        continue;
-      }
-
-      if (_isDuplicateLocationName(result.name)) {
-        prefill = result;
-        sheetError = 'Location name already exists. Please use a unique name.';
-        continue;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Looking up latitude/longitude...')),
-      );
-
-      final GeocodePoint? point =
-          await LocationGeocodingService.lookupCoordinates(
-        result,
-      );
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      if (point == null) {
-        prefill = result;
-        sheetError =
-            'Could not find that address. Please correct it and try again.';
-        continue;
-      }
-
-      final JobSite newSite = JobSite(
-        name: result.name.trim(),
-        street: result.street,
-        city: result.city,
-        state: result.state,
-        zip: result.zip,
-        lat: point.lat,
-        lng: point.lng,
-        requiredDwellMinutes: result.requiredMinutes,
-      );
-
-      if (_hasReachedLocationLimit()) {
-        if (!mounted) {
-          return;
-        }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_locationLimitReachedMessage()),
-          ),
-        );
-        return;
-      }
-
-      setState(() {
-        _state.addSite(newSite);
-      });
-      unawaited(_saveSites());
-      _onSitesChanged();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Added location: ${newSite.name} (${result.requiredMinutes}m).',
-          ),
-        ),
-      );
-      return;
-    }
-  }
-
-  Future<LocationFix?> _readCurrentLocationForAdd() async {
-    if (!Platform.isAndroid) {
-      if (!mounted) {
-        return null;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Current GPS lookup is available on Android only.'),
-        ),
-      );
-      return null;
-    }
-
-    final bool serviceEnabled =
-        await LocationPermissionService.isLocationServiceEnabled(
-      _locationChannel,
+    final JobSite? newSite =
+        await LocationAddWorkflowController.collectLocationFromManualEntry(
+      context: context,
+      logMinuteOptions: AppConstants.logMinuteOptions,
+      isDuplicateLocationName: _isDuplicateLocationName,
+      title: 'Add New Location',
+      submitLabel: 'Add',
     );
-    if (!serviceEnabled) {
-      if (!mounted) {
-        return null;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('Location services are off. Turn on GPS and try again.'),
-        ),
-      );
-      return null;
+    if (newSite == null || !mounted) {
+      return;
     }
 
-    final bool granted = await LocationPermissionService
-      .checkAndRequestPermission(_locationChannel);
-    if (!granted) {
-      if (!mounted) {
-        return null;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Location permission is required to use current GPS.'),
-        ),
-      );
-      return null;
+    if (_hasReachedLocationLimit()) {
+      _showLocationLimitReachedSnackBar();
+      return;
     }
 
-    try {
-      final Map<Object?, Object?>? position = await _locationChannel
-          .invokeMethod<Map<Object?, Object?>>('getCurrentLocation')
-          .timeout(_gpsReadTimeout);
-      final double? lat = (position?['latitude'] as num?)?.toDouble();
-      final double? lng = (position?['longitude'] as num?)?.toDouble();
-      if (lat == null || lng == null) {
-        return null;
-      }
-      return LocationFix(
-        lat: lat,
-        lng: lng,
-        accuracyMeters: ((position?['accuracy'] as num?)?.toDouble() ?? 999),
-        speedMetersPerSecond: max(
-          0,
-          ((position?['speed'] as num?)?.toDouble() ?? 0),
+    setState(() {
+      _state.addSite(newSite);
+    });
+    unawaited(_saveSites());
+    _onSitesChanged();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Added location: ${newSite.name} (${newSite.requiredDwellMinutes}m).',
         ),
-      );
-    } catch (_) {
-      return null;
-    }
+      ),
+    );
   }
 
   Future<void> _onAddFromCurrentLocation() async {
@@ -2690,11 +2453,7 @@ class _ScenarioPageState extends State<ScenarioPage>
         return;
       }
       if (_hasReachedLocationLimit()) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_locationLimitReachedMessage()),
-          ),
-        );
+        _showLocationLimitReachedSnackBar();
       }
       return;
     }
@@ -2703,251 +2462,95 @@ class _ScenarioPageState extends State<ScenarioPage>
       _isFetchingCurrentLocation = true;
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Reading current GPS location...')),
-    );
-    final LocationFix? fix = await _readCurrentLocationForAdd();
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-    if (fix == null) {
-      setState(() {
-        _isFetchingCurrentLocation = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('Could not get current GPS location. Please try again.'),
-        ),
-      );
-      return;
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Looking up address from GPS...')),
-    );
-    final AddLocationInput? reversePrefill =
-        await LocationGeocodingService.reverseLookupAddress(
-      fix,
-      defaultRequiredMinutes:
-          _logMinuteOptions.contains(20) ? 20 : _logMinuteOptions.first,
-    );
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-    AddLocationInput? prefill = reversePrefill ??
-        AddLocationInput(
-          name: '',
-          street: '',
-          city: '',
-          state: '',
-          zip: '',
-          requiredMinutes:
-              _logMinuteOptions.contains(20) ? 20 : _logMinuteOptions.first,
-        );
-    String? sheetError = reversePrefill == null
-        ? 'Could not detect full address from GPS. Please enter or correct it.'
-        : 'Confirm the address and enter a name.';
-
-    while (true) {
-      final AddLocationInput? result =
-          await showModalBottomSheet<AddLocationInput>(
+    try {
+      _showInfoSnackBar('Reading current GPS location...');
+      final LocationFix? fix =
+          await TrackingAccessController.readCurrentLocationForAdd(
         context: context,
-        isScrollControlled: true,
-        builder: (BuildContext sheetContext) {
-          return AddLocationSheet(
-            title: 'Add From Current Location',
-            submitLabel: 'Add',
-            logMinuteOptions: _logMinuteOptions,
-            initialInput: prefill,
-            errorMessage: sheetError,
-          );
-        },
-      );
-
-      if (result == null || !mounted) {
-        setState(() {
-          _isFetchingCurrentLocation = false;
-        });
-        return;
-      }
-
-      if (_hasMissingRequiredLocationFields(result)) {
-        prefill = result;
-        sheetError = 'Please fill name, street, city, state, and ZIP.';
-        continue;
-      }
-
-      if (_isDuplicateLocationName(result.name)) {
-        prefill = result;
-        sheetError = 'Location name already exists. Please use a unique name.';
-        continue;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Verifying address coordinates...')),
-      );
-      final GeocodePoint? point =
-          await LocationGeocodingService.lookupCoordinates(
-        result,
+        channel: _locationChannel,
+        timeout: AppConstants.gpsReadTimeout,
       );
       if (!mounted) {
         return;
       }
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      if (point == null) {
-        prefill = result;
-        sheetError =
-            'Could not find that address. Please correct it and try again.';
-        continue;
-      }
-
-      if (_hasReachedLocationLimit()) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_locationLimitReachedMessage()),
-          ),
-        );
-        setState(() {
-          _isFetchingCurrentLocation = false;
-        });
+      if (fix == null) {
         return;
       }
 
-      final JobSite newSite = JobSite(
-        name: result.name.trim(),
-        street: result.street,
-        city: result.city,
-        state: result.state,
-        zip: result.zip,
-        lat: point.lat,
-        lng: point.lng,
-        requiredDwellMinutes: result.requiredMinutes,
+      final int defaultMinutes = _logMinuteOptions.contains(20)
+          ? 20
+          : AppConstants.logMinuteOptions.first;
+      final JobSite? newSite =
+          await LocationAddWorkflowController.collectLocationFromCurrentFix(
+        context: context,
+        fix: fix,
+        logMinuteOptions: AppConstants.logMinuteOptions,
+        defaultRequiredMinutes: defaultMinutes,
+        isDuplicateLocationName: _isDuplicateLocationName,
       );
+      if (newSite == null || !mounted) {
+        return;
+      }
+
+      if (_hasReachedLocationLimit()) {
+        _showLocationLimitReachedSnackBar();
+        return;
+      }
 
       setState(() {
         _state.addSite(newSite);
-        _isFetchingCurrentLocation = false;
       });
       unawaited(_saveSites());
       _onSitesChanged();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Added location from current GPS: ${newSite.name} (${result.requiredMinutes}m).',
-          ),
-        ),
+      _showInfoSnackBar(
+        'Added location from current GPS: ${newSite.name} (${newSite.requiredDwellMinutes}m).',
       );
-      return;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isFetchingCurrentLocation = false;
+        });
+      } else {
+        _isFetchingCurrentLocation = false;
+      }
     }
   }
 
   Future<void> _onEditLocation(int index, JobSite site) async {
-    AddLocationInput? prefill = AddLocationInput(
-      name: site.name,
-      street: site.street,
-      city: site.city,
-      state: site.state,
-      zip: site.zip,
-      requiredMinutes: site.requiredDwellMinutes,
+    final JobSite? updatedSite =
+        await LocationAddWorkflowController.collectUpdatedLocation(
+      context: context,
+      existingSite: site,
+      excludingIndex: index,
+      logMinuteOptions: AppConstants.logMinuteOptions,
+      isDuplicateLocationName: _isDuplicateLocationName,
     );
-    String? sheetError;
-
-    while (true) {
-      final AddLocationInput? result =
-          await showModalBottomSheet<AddLocationInput>(
-        context: context,
-        isScrollControlled: true,
-        builder: (BuildContext sheetContext) {
-          return AddLocationSheet(
-            title: 'Edit Location',
-            submitLabel: 'Save',
-            logMinuteOptions: _logMinuteOptions,
-            initialInput: prefill,
-            errorMessage: sheetError,
-          );
-        },
-      );
-
-      if (result == null || !mounted) {
-        return;
-      }
-
-      if (_hasMissingRequiredLocationFields(result)) {
-        prefill = result;
-        sheetError = 'Please fill name, street, city, state, and ZIP.';
-        continue;
-      }
-
-      if (_isDuplicateLocationName(result.name, excludingIndex: index)) {
-        prefill = result;
-        sheetError = 'Location name already exists. Please use a unique name.';
-        continue;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Looking up updated latitude/longitude...')),
-      );
-
-      final GeocodePoint? point =
-          await LocationGeocodingService.lookupCoordinates(
-        result,
-      );
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      if (point == null) {
-        prefill = result;
-        sheetError = 'Could not geocode address. Please verify and try again.';
-        continue;
-      }
-
-      final JobSite updatedSite = JobSite(
-        name: result.name.trim(),
-        street: result.street,
-        city: result.city,
-        state: result.state,
-        zip: result.zip,
-        lat: point.lat,
-        lng: point.lng,
-        requiredDwellMinutes: result.requiredMinutes,
-      );
-
-      setState(() {
-        _state.updateSite(index, updatedSite);
-        _state.updateLogNameByAddress(site.address, updatedSite.name);
-        if (_candidateSite?.address == site.address) {
-          _candidateSite = updatedSite;
-        }
-        if (_pendingSite?.address == site.address) {
-          _pendingSite = updatedSite;
-        }
-        if (_latestNearest?.site.address == site.address) {
-          _latestNearest = SiteDistance(
-            site: updatedSite,
-            distanceMeters: _latestNearest!.distanceMeters,
-          );
-        }
-      });
-      unawaited(_saveSites());
-      _onSitesChanged();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Updated location: ${updatedSite.name} (${result.requiredMinutes}m).',
-          ),
-        ),
-      );
+    if (updatedSite == null || !mounted) {
       return;
     }
+
+    setState(() {
+      _state.updateSite(index, updatedSite);
+      _state.updateLogNameByAddress(site.address, updatedSite.name);
+      if (_geofence.candidateSite?.address == site.address) {
+        _geofence.candidateSite = updatedSite;
+      }
+      if (_geofence.pendingSite?.address == site.address) {
+        _geofence.pendingSite = updatedSite;
+      }
+      if (_gpsState.latestNearest?.site.address == site.address) {
+        _gpsState.latestNearest = SiteDistance(
+          site: updatedSite,
+          distanceMeters: _gpsState.latestNearest!.distanceMeters,
+        );
+      }
+    });
+    unawaited(_saveSites());
+    _onSitesChanged();
+    _showInfoSnackBar(
+      'Updated location: ${updatedSite.name} (${updatedSite.requiredDwellMinutes}m).',
+    );
   }
 
   Future<void> _onDeleteLocation(int index, JobSite site) async {
@@ -2966,9 +2569,7 @@ class _ScenarioPageState extends State<ScenarioPage>
     });
     unawaited(_saveSites());
     _onSitesChanged();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Deleted location: ${site.name}.')),
-    );
+    _showInfoSnackBar('Deleted location: ${site.name}.');
   }
 
   Future<void> _onResetAllSites() async {
@@ -2976,9 +2577,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No sites to reset.')),
-      );
+      _showInfoSnackBar('No sites to reset.');
       return;
     }
 
@@ -2989,70 +2588,51 @@ class _ScenarioPageState extends State<ScenarioPage>
       return;
     }
 
-    if (_isTracking) {
+    if (_tracking.isTracking) {
       _stopScenario();
     }
 
     setState(() {
       _state.clearSites();
-      _latestNearest = null;
-      _candidateSite = null;
-      _pendingSite = null;
-      _promptCountdown = 0;
+      _gpsState.latestNearest = null;
+      _geofence.clear();
       _state.clearTrackingRuntimeState();
-      _status =
+      _tracking.status =
           'All locations were reset. Add locations from the Locations tab.';
     });
 
     unawaited(_saveSites());
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('All saved locations were reset.')),
-    );
+    _showInfoSnackBar('All saved locations were reset.');
   }
 
   Future<void> _onDeleteLogEntry(int index, JobLog log) async {
-    final bool confirmDelete =
-        await ScenarioDialogService.confirmDeleteLogEntry(
-      context,
-      address: log.address,
+    await LogEntryActionsController.handleDeleteLogEntry(
+      context: context,
+      channel: _locationChannel,
+      log: log,
+      onDeletedKey: (String deletedKey) {
+        _state.addDeletedLogKey(deletedKey);
+        unawaited(_saveDeletedLogKeys());
+      },
+      onCalendarKeyRemoved: (String deletedKey) {
+        _state.removeCalendarAddedLogKey(deletedKey);
+        unawaited(_saveCalendarAddedLogKeys());
+      },
+      removeLogFromState: () {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _state.removeLogAt(index);
+        });
+      },
     );
-
-    if (!confirmDelete || !mounted) {
-      return;
-    }
-
-    final String deletedKey = _logStorageKey(
-      address: log.address,
-      timestampMillis: log.timestamp.millisecondsSinceEpoch,
-    );
-    _state.addDeletedLogKey(deletedKey);
-    unawaited(_saveDeletedLogKeys());
-    _state.removeCalendarAddedLogKey(deletedKey);
-    unawaited(_saveCalendarAddedLogKeys());
-
-    setState(() {
-      _state.removeLogAt(index);
-    });
-
-    try {
-      await _locationChannel.invokeMethod<void>(
-        'deleteBackgroundLog',
-        <String, dynamic>{
-          'address': log.address,
-          'timestamp': log.timestamp.millisecondsSinceEpoch,
-        },
-      );
-    } on MissingPluginException {
-      // Desktop/iOS/web may not implement background log persistence.
-    } on PlatformException {
-      // Keep local delete behavior even if persistence fails.
-    }
   }
 
   Future<void> _onEditLogEntry(int index, JobLog log) async {
-    final String? updatedNotes = await ScenarioDialogService.editLogNotes(
+    final String? updatedNotes = await LogEntryActionsController.requestEditedNotes(
       context,
-      initialNotes: log.notes,
+      log: log,
     );
 
     if (updatedNotes == null || !mounted) {
@@ -3066,11 +2646,11 @@ class _ScenarioPageState extends State<ScenarioPage>
 
   Widget _buildLogScreen() {
     return LogScreenView(
-      statusText: _status,
-      currentFix: _currentFix,
-      latestNearest: _latestNearest,
-      pendingSite: _pendingSite,
-      promptCountdown: _promptCountdown,
+      statusText: _tracking.status,
+      currentFix: _gpsState.currentFix,
+      latestNearest: _gpsState.latestNearest,
+      pendingSite: _geofence.pendingSite,
+      promptCountdown: _geofence.promptCountdown,
       logs: _logs,
       timeInGeofenceMinutesByAddress: _projectedTimeInGeofenceMinutesBySite(),
       outOfGeofenceMinutesByAddress: _projectedOutOfGeofenceMinutesBySite(),
@@ -3138,11 +2718,11 @@ class _ScenarioPageState extends State<ScenarioPage>
       maxFontScale: widget.maxFontScale,
       fontScaleStep: widget.fontScaleStep,
       onFontScaleChanged: widget.onFontScaleChanged,
-      isTracking: _isTracking,
+      isTracking: _tracking.isTracking,
       trackingEnabledPreference: _trackingEnabledPreference,
       isChangingTrackingState: _isChangingTrackingState,
-      status: _status,
-      trackingSummary: _isTracking
+      status: _tracking.status,
+      trackingSummary: _tracking.isTracking
           ? 'Current polling: ${_formatSecondsOption(_activePollSeconds())} (${_pollingModeSummary()} mode).'
           : 'Close polling uses ${_formatSecondsOption(_closePollSeconds)}. Far polling uses ${_formatSecondsOption(_farPollSeconds)} beyond ${_formatMetersOption(_farDistanceMeters)}.',
       onTrackingToggleChanged: (bool value) {
@@ -3153,18 +2733,18 @@ class _ScenarioPageState extends State<ScenarioPage>
       farDistanceMeters: _farDistanceMeters,
       inGeofenceDistanceMeters: _inGeofenceDistanceMeters,
       outOfGeofenceRetriggerMinutes: _outOfGeofenceRetriggerMinutes,
-      closePollSecondOptions: _closePollSecondOptions,
-      farPollSecondOptions: _farPollSecondOptions,
-      farDistanceMeterOptions: _farDistanceMeterOptions,
-      inGeofenceDistanceMeterOptions: _inGeofenceDistanceMeterOptions,
-      outOfGeofenceRetriggerMinuteOptions: _outOfGeofenceRetriggerMinuteOptions,
+      closePollSecondOptions: AppConstants.closePollSecondOptions,
+      farPollSecondOptions: AppConstants.farPollSecondOptions,
+      farDistanceMeterOptions: AppConstants.farDistanceMeterOptions,
+      inGeofenceDistanceMeterOptions: AppConstants.inGeofenceDistanceMeterOptions,
+      outOfGeofenceRetriggerMinuteOptions: AppConstants.outOfGeofenceRetriggerMinuteOptions,
       hideNearestWhenFar: _hideNearestWhenFar,
       onClosePollSecondsChanged: (int value) {
         setState(() {
           _closePollSeconds = value;
         });
         unawaited(_savePollingPreferences());
-        if (_isTracking) {
+        if (_tracking.isTracking) {
           _scheduleNextPoll(immediate: true);
         }
         _refreshNearestUiFromCurrentFix();
@@ -3174,7 +2754,7 @@ class _ScenarioPageState extends State<ScenarioPage>
           _farPollSeconds = value;
         });
         unawaited(_savePollingPreferences());
-        if (_isTracking) {
+        if (_tracking.isTracking) {
           _scheduleNextPoll(immediate: true);
         }
         _refreshNearestUiFromCurrentFix();
@@ -3184,7 +2764,7 @@ class _ScenarioPageState extends State<ScenarioPage>
           _farDistanceMeters = value;
         });
         unawaited(_savePollingPreferences());
-        if (_isTracking) {
+        if (_tracking.isTracking) {
           _scheduleNextPoll(immediate: true);
         }
         _refreshNearestUiFromCurrentFix();
@@ -3194,7 +2774,7 @@ class _ScenarioPageState extends State<ScenarioPage>
           _inGeofenceDistanceMeters = value;
         });
         unawaited(_savePollingPreferences());
-        if (_isTracking) {
+        if (_tracking.isTracking) {
           _scheduleNextPoll(immediate: true);
         }
         _refreshNearestUiFromCurrentFix();

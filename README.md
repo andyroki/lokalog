@@ -56,6 +56,8 @@ To run on your connected phone:
 ```bash
 flutter run -d ZY22L93QR9
 flutter run -d R5GL234YAGT
+
+flutter run -d ZY22FD29PT
 ```
 
 ## Release Build (PowerShell)

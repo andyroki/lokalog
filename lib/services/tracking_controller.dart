@@ -1,4 +1,5 @@
 import '../models/lokalog_models.dart';
+import '../constants/app_constants.dart';
 import 'location_tracking_calculator.dart';
 
 class TrackingProcessResult {
@@ -65,6 +66,7 @@ class TrackingController {
 
     final bool goodAccuracy = fix.accuracyMeters <= maxAccuracyMeters;
     final bool lowSpeed = fix.speedMetersPerSecond <= maxSpeedForDwell;
+    final bool canUseFixForDwell = goodAccuracy && lowSpeed;
     final double effectiveRadius = _effectiveRadius(
       matchRadiusMeters,
       fix.accuracyMeters,
@@ -87,21 +89,30 @@ class TrackingController {
       final bool isLogged = sessionLoggedAddresses.contains(site.address);
       final double retriggerOutsideRadius =
           effectiveRadius + (fix.accuracyMeters * 0.75 < 25 ? 25 : fix.accuracyMeters * 0.75);
+        final double requiredOutsideDistance = retriggerOutsideRadius >
+            AppConstants.retriggerMinimumOutsideDistanceMeters
+          ? retriggerOutsideRadius
+          : AppConstants.retriggerMinimumOutsideDistanceMeters;
       final bool confidentlyOutside =
-          distance > retriggerOutsideRadius && goodAccuracy;
+          distance > requiredOutsideDistance && goodAccuracy;
 
       if (distance < nearestDistance) {
         nearestSite = site;
         nearestDistance = distance;
       }
 
-      // Keep dwell updated per site so debug/state reflects current geofence
-      // status for all locations, not just the nearest candidate.
+      // Only high-quality, low-speed fixes are allowed to advance dwell/candidate state.
+      // Low-quality readings are treated as "unknown" so they don't trigger false logs
+      // or accidental dwell resets.
       if (inGeofence) {
-        timeInGeofenceMinutes[site.address] =
-            (timeInGeofenceMinutes[site.address] ?? 0) + increment;
+        if (canUseFixForDwell) {
+          timeInGeofenceMinutes[site.address] =
+              (timeInGeofenceMinutes[site.address] ?? 0) + increment;
+        }
       } else {
-        timeInGeofenceMinutes[site.address] = 0;
+        if (goodAccuracy) {
+          timeInGeofenceMinutes[site.address] = 0;
+        }
       }
 
       if (isLogged) {
@@ -122,7 +133,7 @@ class TrackingController {
         continue;
       }
 
-      if (inGeofence && distance < candidateDistance) {
+      if (inGeofence && canUseFixForDwell && distance < candidateDistance) {
         nextCandidateSite = site;
         candidateDistance = distance;
       }

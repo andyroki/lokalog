@@ -48,9 +48,11 @@ class LogScreenView extends StatelessWidget {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final bool isDark = theme.brightness == Brightness.dark;
+    final double bottomSafeInset = MediaQuery.of(context).padding.bottom;
+    final double bottomListPadding = 16 + bottomSafeInset + 84;
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, bottomListPadding),
       children: <Widget>[
         _sectionCard(
           context,
@@ -292,6 +294,7 @@ class LogScreenView extends StatelessWidget {
               ),
             );
           }),
+        const SizedBox(height: 8),
       ],
     );
   }
