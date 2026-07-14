@@ -312,6 +312,7 @@ class _ScenarioPageState extends State<ScenarioPage>
   Set<String> get _deletedLogKeys => _state.deletedLogKeys;
   Set<String> get _calendarAddedLogKeys => _state.calendarAddedLogKeys;
   Set<String> get _sessionLoggedAddresses => _state.sessionLoggedAddresses;
+  final Set<String> _debugRetriggerArmedAddresses = <String>{};
   Map<String, double> get _timeInGeofenceMinutesBySite =>
       _state.timeInGeofenceMinutes;
   Map<String, DateTime> get _outOfGeofenceSince => _state.outOfGeofenceSince;
@@ -2029,6 +2030,8 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
 
     final JobSite activeSite = _findSiteByAddress(site);
+    final bool debugRetriggerArmed =
+        _debugRetriggerArmedAddresses.contains(activeSite.address);
     final DateTime now = DateTime.now();
 
     // Hard guard: a site can log only once per visit.
@@ -2047,7 +2050,7 @@ class _ScenarioPageState extends State<ScenarioPage>
           (JobLog? log) => log?.address == activeSite.address,
           orElse: () => null,
         );
-    if (latestForSite != null) {
+    if (latestForSite != null && !debugRetriggerArmed) {
       final double minutesSinceLast =
           _minutesSince(latestForSite.timestamp, now);
       final double effectiveRadius =
@@ -2119,6 +2122,7 @@ class _ScenarioPageState extends State<ScenarioPage>
 
     setState(() {
       _sessionLoggedAddresses.add(activeSite.address);
+      _debugRetriggerArmedAddresses.remove(activeSite.address);
       _outOfGeofenceSince.remove(activeSite.address);
       _geofence.dismissPrompt();
       _tracking.status = autoLogged
@@ -2205,6 +2209,7 @@ class _ScenarioPageState extends State<ScenarioPage>
 
     setState(() {
       _sessionLoggedAddresses.remove(site.address);
+      _debugRetriggerArmedAddresses.add(site.address);
       _outOfGeofenceSince.remove(site.address);
       _timeInGeofenceMinutesBySite[site.address] = 0;
       _tracking.stableSamples = 0;
