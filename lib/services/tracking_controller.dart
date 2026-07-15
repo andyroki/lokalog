@@ -87,10 +87,10 @@ class TrackingController {
       );
       final bool inGeofence = distance <= effectiveRadius;
       final bool isLogged = sessionLoggedAddresses.contains(site.address);
-      final double retriggerOutsideRadius =
-          effectiveRadius + (fix.accuracyMeters * 0.75 < 25 ? 25 : fix.accuracyMeters * 0.75);
-        final double requiredOutsideDistance = retriggerOutsideRadius >
-            AppConstants.retriggerMinimumOutsideDistanceMeters
+      final double retriggerOutsideRadius = effectiveRadius +
+          (fix.accuracyMeters * 0.75 < 25 ? 25 : fix.accuracyMeters * 0.75);
+      final double requiredOutsideDistance = retriggerOutsideRadius >
+              AppConstants.retriggerMinimumOutsideDistanceMeters
           ? retriggerOutsideRadius
           : AppConstants.retriggerMinimumOutsideDistanceMeters;
       final bool confidentlyOutside =
@@ -125,10 +125,6 @@ class TrackingController {
             outOfGeofenceSince.remove(site.address);
             timeInGeofenceMinutes[site.address] = 0;
           }
-        } else {
-          // Only allow retrigger timer to run while we are clearly outside.
-          // Borderline/low-confidence readings should not accumulate out time.
-          outOfGeofenceSince.remove(site.address);
         }
         continue;
       }
@@ -158,7 +154,7 @@ class TrackingController {
     final bool shouldPrompt = nextCandidateSite != null &&
         pendingSite == null &&
         !sessionLoggedAddresses.contains(nextCandidateSite.address) &&
-      (timeInGeofenceMinutes[nextCandidateSite.address] ?? 0) >=
+        (timeInGeofenceMinutes[nextCandidateSite.address] ?? 0) >=
             nextCandidateSite.requiredDwellMinutes.toDouble() &&
         nextStableSamples >= requiredStableSamples;
 
@@ -176,7 +172,8 @@ class TrackingController {
     );
   }
 
-  static double _effectiveRadius(double matchRadiusMeters, double accuracyMeters) {
+  static double _effectiveRadius(
+      double matchRadiusMeters, double accuracyMeters) {
     return matchRadiusMeters < accuracyMeters + 35
         ? (matchRadiusMeters + 80 < accuracyMeters + 35
             ? matchRadiusMeters + 80

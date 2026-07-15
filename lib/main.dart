@@ -1472,21 +1472,8 @@ class _ScenarioPageState extends State<ScenarioPage>
         return;
       }
 
-      final Set<String> knownAddresses =
-          _sites.map((JobSite site) => site.address).toSet();
-      final Set<String> loggedAddresses = loadedLogs
-          .map((JobLog log) => log.address)
-          .where((String address) =>
-              address.isNotEmpty && knownAddresses.contains(address))
-          .toSet();
-
       setState(() {
         _state.mergeLoadedLogs(loadedLogs);
-        _sessionLoggedAddresses.addAll(loggedAddresses);
-        if (_geofence.pendingSite != null &&
-            loggedAddresses.contains(_geofence.pendingSite!.address)) {
-          _geofence.dismissPrompt();
-        }
       });
     } catch (_) {
       // Ignore background log load errors; they are not fatal.
@@ -2050,7 +2037,11 @@ class _ScenarioPageState extends State<ScenarioPage>
           (JobLog? log) => log?.address == activeSite.address,
           orElse: () => null,
         );
-    if (latestForSite != null && !debugRetriggerArmed) {
+    final bool visitStillActive =
+        _sessionLoggedAddresses.contains(activeSite.address) ||
+            _outOfGeofenceSince.containsKey(activeSite.address);
+
+    if (latestForSite != null && !debugRetriggerArmed && visitStillActive) {
       final double minutesSinceLast =
           _minutesSince(latestForSite.timestamp, now);
       final double effectiveRadius =
