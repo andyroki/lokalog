@@ -12,7 +12,7 @@ class AppConstants {
   static const List<int> farPollSecondOptions = <int>[60, 300, 600];
   static const List<int> farDistanceMeterOptions = <int>[300, 1000, 2000, 3000, 5000];
   static const List<int> inGeofenceDistanceMeterOptions = <int>[50, 100, 150, 200, 300];
-  static const List<int> outOfGeofenceRetriggerMinuteOptions = <int>[1, 20, 45, 60];
+  static const List<int> outOfGeofenceRetriggerMinuteOptions = <int>[20, 45, 60];
 
   // Dwell and stability
   static const int requiredStableSamples = 3;
