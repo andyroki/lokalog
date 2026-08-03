@@ -260,7 +260,10 @@ class _ScenarioPageState extends State<ScenarioPage>
   int _selectedTabIndex = 0;
   bool _isChangingTrackingState = false;
   bool _isFetchingCurrentLocation = false;
+  bool _locationServiceEnabled = false;
   bool _backgroundLocationPermissionGranted = false;
+  bool _notificationPermissionGranted = false;
+  bool _batteryOptimizationDisabled = false;
 
   // Startup and lifecycle flags
   bool _autoStartTrackingAttempted = false;
@@ -313,6 +316,8 @@ class _ScenarioPageState extends State<ScenarioPage>
   Set<String> get _calendarAddedLogKeys => _state.calendarAddedLogKeys;
   Set<String> get _sessionLoggedAddresses => _state.sessionLoggedAddresses;
   final Set<String> _debugRetriggerArmedAddresses = <String>{};
+    final Map<String, String> _loggedStateReasonsByAddress =
+      <String, String>{};
   Map<String, double> get _timeInGeofenceMinutesBySite =>
       _state.timeInGeofenceMinutes;
   Map<String, DateTime> get _outOfGeofenceSince => _state.outOfGeofenceSince;
@@ -345,7 +350,9 @@ class _ScenarioPageState extends State<ScenarioPage>
     unawaited(_loadUnitPreference());
     unawaited(_loadTrackingPreference());
     unawaited(_loadLocationLimitUnlockedPreference());
+    unawaited(_refreshPermissionChecklistStatus());
     unawaited(_refreshBackgroundLocationPermissionStatus());
+    unawaited(_refreshBatteryOptimizationStatus());
     unawaited(_loadTrackingRuntimeState());
     unawaited(_loadSites());
   }
@@ -364,6 +371,9 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
 
     if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshPermissionChecklistStatus());
+      unawaited(_refreshBackgroundLocationPermissionStatus());
+      unawaited(_refreshBatteryOptimizationStatus());
       unawaited(_loadBackgroundLogs());
     }
   }
@@ -444,6 +454,60 @@ class _ScenarioPageState extends State<ScenarioPage>
       return;
     }
     await _clearBackgroundGeofences();
+  }
+
+  Future<void> _refreshPermissionChecklistStatus() async {
+    if (!Platform.isAndroid) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _locationServiceEnabled = true;
+        _notificationPermissionGranted = true;
+      });
+      return;
+    }
+
+    final bool serviceEnabled =
+        await LocationPermissionService.isLocationServiceEnabled(
+      _locationChannel,
+    );
+    final bool notificationsGranted =
+        await LocationPermissionService.hasNotificationPermission(
+      _locationChannel,
+    );
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _locationServiceEnabled = serviceEnabled;
+      _notificationPermissionGranted = notificationsGranted;
+    });
+  }
+
+  Future<void> _refreshBatteryOptimizationStatus() async {
+    if (!Platform.isAndroid) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _batteryOptimizationDisabled = true;
+      });
+      return;
+    }
+
+    final bool disabled =
+        await LocationPermissionService.isIgnoringBatteryOptimizations(
+      _locationChannel,
+    );
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _batteryOptimizationDisabled = disabled;
+    });
   }
 
   // ============================================================================
@@ -832,6 +896,8 @@ class _ScenarioPageState extends State<ScenarioPage>
       matchRadiusMeters: _inGeofenceDistanceMeters.toDouble(),
       timeInGeofenceMinutes: _projectedTimeInGeofenceMinutesBySite(),
       sessionLoggedAddresses: _sessionLoggedAddresses,
+      outOfGeofenceSince: _outOfGeofenceSince,
+      loggedStateReasons: _loggedStateReasonsByAddress,
       pendingSite: _geofence.pendingSite,
       candidateSite: _geofence.candidateSite,
       now: DateTime.now(),
@@ -883,7 +949,8 @@ class _ScenarioPageState extends State<ScenarioPage>
       return '${state.name}\n'
           '  in geofence: ${state.inGeofence}  |  out: ${state.outOfGeofence}  |  far: ${state.far}  |  dist: $dist\n'
           '  time in geofence: $timeInGeofence  |  out-of-geofence: $outDuration  |  remaining: ${remaining}m\n'
-          '  logged: ${state.logged}  |  waiting: ${state.waitingToGetLogged}';
+          '  logged: ${state.logged}  |  waiting: ${state.waitingToGetLogged}\n'
+          '  log-state reason: ${state.loggedStateReason}';
     }).join('\n\n');
 
     return 'Location Tracking State\n\n$lines';
@@ -1472,9 +1539,26 @@ class _ScenarioPageState extends State<ScenarioPage>
         return;
       }
 
+      final Set<String> loadedLogAddresses =
+          loadedLogs.map((JobLog log) => log.address).toSet();
+
       setState(() {
         _state.mergeLoadedLogs(loadedLogs);
+        for (final JobLog log in loadedLogs) {
+          _loggedStateReasonsByAddress.putIfAbsent(
+            log.address,
+            () =>
+                'Background log exists; re-log stays blocked until retrigger/reset is proven.',
+          );
+        }
+        if (_geofence.pendingSite != null &&
+            loadedLogAddresses.contains(_geofence.pendingSite!.address)) {
+          _geofence.dismissPrompt();
+        }
       });
+      if (_geofence.pendingSite == null) {
+        unawaited(_cancelLogReminderNotification());
+      }
     } catch (_) {
       // Ignore background log load errors; they are not fatal.
     }
@@ -1728,6 +1812,31 @@ class _ScenarioPageState extends State<ScenarioPage>
     }
   }
 
+  Future<void> _openNotificationSettings() async {
+    try {
+      await LocationPermissionService.openNotificationSettings(
+          _locationChannel);
+    } catch (_) {
+      _showInfoSnackBar('Could not open Notification settings.');
+    }
+  }
+
+  Future<void> _openBatteryOptimizationSettings() async {
+    try {
+      final bool opened =
+          await LocationPermissionService.openBatteryOptimizationSettings(
+        _locationChannel,
+      );
+      if (!opened) {
+        _showInfoSnackBar(
+          'Could not open Battery page directly. Open App info for Lokalog, then Battery > Unrestricted.',
+        );
+      }
+    } catch (_) {
+      _showInfoSnackBar('Could not open Battery optimization settings.');
+    }
+  }
+
   /// Poll current GPS location from platform and process the fix.
   /// Handles timeout and platform exceptions gracefully, updating status appropriately.
   Future<void> _pollCurrentLocation() async {
@@ -1898,6 +2007,7 @@ class _ScenarioPageState extends State<ScenarioPage>
       _geofence.candidateSite = result.candidateSite;
       _tracking.stableSamples = result.stableSamples;
       _gpsState.latestNearest = result.latestNearest;
+      _loggedStateReasonsByAddress.addAll(result.loggedStateReasonUpdates);
       _tracking.status = _buildStatusText(
         nearest: result.latestNearest!,
         goodAccuracy: result.goodAccuracy,
@@ -1910,6 +2020,9 @@ class _ScenarioPageState extends State<ScenarioPage>
 
     // Check whether the candidate has now met the dwell target.
     if (result.shouldPrompt && result.promptSite != null) {
+      if (!_canPromptForSite(result.promptSite!, now)) {
+        return;
+      }
       _showConfirmationPrompt(result.promptSite!);
     }
   }
@@ -1964,6 +2077,9 @@ class _ScenarioPageState extends State<ScenarioPage>
   // ============================================================================
 
   void _showConfirmationPrompt(JobSite site) {
+    if (!_canPromptForSite(site, DateTime.now())) {
+      return;
+    }
     setState(() {
       _geofence.setPending(site, 12);
     });
@@ -1988,6 +2104,33 @@ class _ScenarioPageState extends State<ScenarioPage>
         });
       }
     });
+  }
+
+  bool _canPromptForSite(JobSite site, DateTime now) {
+    final JobSite activeSite = _findSiteByAddress(site);
+    if (_sessionLoggedAddresses.contains(activeSite.address)) {
+      _loggedStateReasonsByAddress[activeSite.address] =
+          'Logged this visit; prompt suppressed because site is already logged.';
+      return false;
+    }
+
+    final JobLog? latestForSite = _logs.cast<JobLog?>().firstWhere(
+          (JobLog? log) => log?.address == activeSite.address,
+          orElse: () => null,
+        );
+    if (latestForSite == null) {
+      return true;
+    }
+
+    final bool resetEvidence = _hasRelogResetEvidence(activeSite.address, now) ||
+        _debugRetriggerArmedAddresses.contains(activeSite.address);
+    if (!resetEvidence) {
+      _loggedStateReasonsByAddress[activeSite.address] =
+          'Prompt suppressed because a previous log exists and no reset evidence was found.';
+      return false;
+    }
+
+    return true;
   }
 
   void _dismissPendingPrompt() {
@@ -2037,22 +2180,43 @@ class _ScenarioPageState extends State<ScenarioPage>
           (JobLog? log) => log?.address == activeSite.address,
           orElse: () => null,
         );
+    final double effectiveRadius =
+        _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
+    final double distance = LocationTrackingCalculator.distanceMetersBetween(
+      fix.lat,
+      fix.lng,
+      activeSite.lat,
+      activeSite.lng,
+    );
+    final bool stillInside = distance <= effectiveRadius;
     final bool visitStillActive =
         _sessionLoggedAddresses.contains(activeSite.address) ||
             _outOfGeofenceSince.containsKey(activeSite.address);
+    final bool relogResetEvidence =
+        _hasRelogResetEvidence(activeSite.address, now) || debugRetriggerArmed;
 
-    if (latestForSite != null && !debugRetriggerArmed && visitStillActive) {
+    if (latestForSite != null && !debugRetriggerArmed) {
+      if (stillInside && !relogResetEvidence) {
+        _rejectLogWithStatus(
+          'Skipped repeat log for ${activeSite.address}. Previous log is still active because no out-of-geofence reset was detected.',
+        );
+        return;
+      }
+
+      if (!visitStillActive) {
+        // Background/native logs can exist without foreground session state.
+        // Do not allow a new in-geofence log unless we have explicit reset evidence.
+        if (!relogResetEvidence) {
+          _rejectLogWithStatus(
+            'Skipped repeat log for ${activeSite.address}. Previous log exists and no reset evidence was found yet.',
+          );
+          return;
+        }
+      }
+
+      if (visitStillActive) {
       final double minutesSinceLast =
           _minutesSince(latestForSite.timestamp, now);
-      final double effectiveRadius =
-          _geofenceCalc.calculateEffectiveRadius(fix.accuracyMeters.toDouble());
-      final double distance = LocationTrackingCalculator.distanceMetersBetween(
-        fix.lat,
-        fix.lng,
-        activeSite.lat,
-        activeSite.lng,
-      );
-      final bool stillInside = distance <= effectiveRadius;
       final double retriggerOutsideRadius = effectiveRadius +
           (fix.accuracyMeters * 0.75 < 25 ? 25 : fix.accuracyMeters * 0.75);
       final double requiredOutsideDistance = retriggerOutsideRadius >
@@ -2077,6 +2241,7 @@ class _ScenarioPageState extends State<ScenarioPage>
           'Skipped repeat log for ${activeSite.address} (retrigger conditions not met yet).',
         );
         return;
+      }
       }
     }
 
@@ -2114,6 +2279,9 @@ class _ScenarioPageState extends State<ScenarioPage>
     setState(() {
       _sessionLoggedAddresses.add(activeSite.address);
       _debugRetriggerArmedAddresses.remove(activeSite.address);
+      _loggedStateReasonsByAddress[activeSite.address] = autoLogged
+          ? 'Logged this visit by auto-log countdown.'
+          : 'Logged this visit by user confirmation.';
       _outOfGeofenceSince.remove(activeSite.address);
       _geofence.dismissPrompt();
       _tracking.status = autoLogged
@@ -2122,6 +2290,19 @@ class _ScenarioPageState extends State<ScenarioPage>
     });
     unawaited(_cancelLogReminderNotification());
     unawaited(_saveTrackingRuntimeState());
+  }
+
+  bool _hasRelogResetEvidence(String address, DateTime now) {
+    final DateTime? outSince = _outOfGeofenceSince[address];
+    final bool outOfGeofenceElapsed =
+        outSince != null &&
+            now.difference(outSince).inMinutes >=
+                _outOfGeofenceRetriggerMinutes;
+    final String? reason = _loggedStateReasonsByAddress[address];
+    final bool explicitReset =
+        reason == 'Not logged: cleared after out-of-geofence retrigger elapsed.' ||
+            reason == 'Not logged: cleared by Debug Retrigger.';
+    return outOfGeofenceElapsed || explicitReset;
   }
 
   Future<void> _confirmAndDebugRetriggerCurrentSite() async {
@@ -2201,6 +2382,8 @@ class _ScenarioPageState extends State<ScenarioPage>
     setState(() {
       _sessionLoggedAddresses.remove(site.address);
       _debugRetriggerArmedAddresses.add(site.address);
+      _loggedStateReasonsByAddress[site.address] =
+          'Not logged: cleared by Debug Retrigger.';
       _outOfGeofenceSince.remove(site.address);
       _timeInGeofenceMinutesBySite[site.address] = 0;
       _tracking.stableSamples = 0;
@@ -2813,7 +2996,12 @@ class _ScenarioPageState extends State<ScenarioPage>
       formatMetersOption: _formatMetersOption,
       onOpenLocationSettings: _openLocationSettings,
       onOpenAppSettings: _openAppSettings,
+      onOpenNotificationSettings: _openNotificationSettings,
+      locationServiceEnabled: _locationServiceEnabled,
       backgroundLocationPermissionGranted: _backgroundLocationPermissionGranted,
+      notificationPermissionGranted: _notificationPermissionGranted,
+      batteryOptimizationDisabled: _batteryOptimizationDisabled,
+      onOpenBatteryOptimizationSettings: _openBatteryOptimizationSettings,
       locationLimitUnlocked: _locationLimitUnlocked,
       onLocationUnlockCodeSubmitted: _onLocationUnlockCodeSubmitted,
     );

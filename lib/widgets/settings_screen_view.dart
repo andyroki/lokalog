@@ -41,7 +41,12 @@ class SettingsScreenView extends StatefulWidget {
     required this.formatMetersOption,
     required this.onOpenLocationSettings,
     required this.onOpenAppSettings,
+    required this.onOpenNotificationSettings,
+    required this.locationServiceEnabled,
     required this.backgroundLocationPermissionGranted,
+    required this.notificationPermissionGranted,
+    required this.batteryOptimizationDisabled,
+    required this.onOpenBatteryOptimizationSettings,
     required this.locationLimitUnlocked,
     required this.onLocationUnlockCodeSubmitted,
   });
@@ -84,7 +89,12 @@ class SettingsScreenView extends StatefulWidget {
   final String Function(int) formatMetersOption;
   final VoidCallback onOpenLocationSettings;
   final VoidCallback onOpenAppSettings;
+  final VoidCallback onOpenNotificationSettings;
+  final bool locationServiceEnabled;
   final bool backgroundLocationPermissionGranted;
+  final bool notificationPermissionGranted;
+  final bool batteryOptimizationDisabled;
+  final VoidCallback onOpenBatteryOptimizationSettings;
   final bool locationLimitUnlocked;
   final ValueChanged<String> onLocationUnlockCodeSubmitted;
 
@@ -237,16 +247,26 @@ class _SettingsScreenViewState extends State<SettingsScreenView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 const Text(
-                  'Font Size',
+                  'Background Logging Requirements',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
-                Text('Current: ${widget.fontScale.toStringAsFixed(2)}x'),
-                const SizedBox(height: 10),
+                Text(
+                  widget.locationServiceEnabled
+                      ? 'GPS service: ON'
+                      : 'GPS service: OFF (turn on Location/GPS in system settings)',
+                  style: TextStyle(
+                    color: widget.locationServiceEnabled
+                        ? Colors.green
+                        : Colors.orange,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
                 Text(
                   widget.backgroundLocationPermissionGranted
                       ? 'Background location: Granted (Allow all the time).'
-                      : 'Background location: Not granted. Set Location permission to "Allow all the time" for app-closed geofencing.',
+                      : 'Background location: Not granted. Set Location permission to "Allow all the time".',
                   style: TextStyle(
                     color: widget.backgroundLocationPermissionGranted
                         ? Colors.green
@@ -254,6 +274,83 @@ class _SettingsScreenViewState extends State<SettingsScreenView> {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
+                const SizedBox(height: 6),
+                Text(
+                  widget.notificationPermissionGranted
+                      ? 'Notifications: Granted'
+                      : 'Notifications: Not granted. Enable notifications for Lokalog.',
+                  style: TextStyle(
+                    color: widget.notificationPermissionGranted
+                        ? Colors.green
+                        : Colors.orange,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  widget.batteryOptimizationDisabled
+                      ? 'Battery optimization: Unrestricted/disabled for Lokalog.'
+                      : 'Battery optimization: ON. Set Lokalog to Unrestricted so background logging works when app is closed.',
+                  style: TextStyle(
+                    color: widget.batteryOptimizationDisabled
+                        ? Colors.green
+                        : Colors.orange,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'How to set it:\n'
+                  '1) Tap Location Settings and turn Location ON.\n'
+                  '2) Tap App Permissions -> Location -> Allow all the time.\n'
+                  '3) Tap Notification Settings and allow notifications.\n'
+                  '4) Tap Battery Optimization and set Lokalog to Unrestricted.\n'
+                  '5) Return here and turn Tracking On.',
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    OutlinedButton.icon(
+                      onPressed: widget.onOpenLocationSettings,
+                      icon: const Icon(Icons.gps_fixed),
+                      label: const Text('Location Settings'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: widget.onOpenAppSettings,
+                      icon: const Icon(Icons.admin_panel_settings_outlined),
+                      label: const Text('App Permissions'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: widget.onOpenNotificationSettings,
+                      icon: const Icon(Icons.notifications_active_outlined),
+                      label: const Text('Notification Settings'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: widget.onOpenBatteryOptimizationSettings,
+                      icon: const Icon(Icons.battery_charging_full),
+                      label: const Text('Battery Optimization'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Font Size',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text('Current: ${widget.fontScale.toStringAsFixed(2)}x'),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,

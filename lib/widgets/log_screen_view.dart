@@ -207,11 +207,12 @@ class LogScreenView extends StatelessWidget {
                 address.isNotEmpty && address != clientName;
             final double liveTimeInGeofence =
                 timeInGeofenceMinutesByAddress[address] ?? 0;
-            final double outOfGeofence =
-                outOfGeofenceMinutesByAddress[address] ?? 0;
             final DateTime now = DateTime.now();
             final bool isMostRecentForAddress =
               logs.take(index).every((JobLog prior) => prior.address != address);
+            final double outOfGeofence = isMostRecentForAddress
+                ? (outOfGeofenceMinutesByAddress[address] ?? 0)
+                : 0;
             final double loggedTimeInGeofence =
               log.timeInGeofenceMinutesAtLog ?? liveTimeInGeofence;
             final double loggedTimeLeft =

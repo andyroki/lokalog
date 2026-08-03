@@ -10,6 +10,8 @@ class LocationTrackingCalculator {
     required double matchRadiusMeters,
     required Map<String, double> timeInGeofenceMinutes,
     required Set<String> sessionLoggedAddresses,
+    required Map<String, DateTime> outOfGeofenceSince,
+    required Map<String, String> loggedStateReasons,
     required JobSite? pendingSite,
     required JobSite? candidateSite,
     required DateTime now,
@@ -44,12 +46,26 @@ class LocationTrackingCalculator {
             (candidateSite?.address == site.address &&
               timeInGeofence > 0));
 
+      final String loggedStateReason = loggedStateReasons[site.address] ??
+          (logged
+              ? (outOfGeofenceSince.containsKey(site.address)
+                  ? 'Logged this visit; out-of-geofence retrigger timer is running.'
+                  : 'Logged this visit; waiting for exit/retrigger reset.'
+                )
+              : (pendingSite?.address == site.address
+                  ? 'Not logged yet; prompt is active.'
+                  : (candidateSite?.address == site.address &&
+                          timeInGeofence > 0
+                      ? 'Not logged yet; dwell is building.'
+                      : 'Not logged this visit.')));
+
       return LocationTrackingState(
         name: site.name,
         far: far,
         inGeofence: inGeofence,
         outOfGeofence: outOfGeofence,
         logged: logged,
+        loggedStateReason: loggedStateReason,
         waitingToGetLogged: waitingToGetLogged,
         timeInGeofenceMinutes: timeInGeofence,
         remainingMinutes: remaining,

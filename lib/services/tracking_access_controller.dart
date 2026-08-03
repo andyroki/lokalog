@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -42,6 +41,21 @@ class TrackingAccessController {
     }
 
     if (!permissionStatus.foregroundPermissionGranted) {
+      final bool grantedNow =
+          await LocationPermissionService.checkAndRequestPermission(channel);
+      if (!context.mounted) {
+        return false;
+      }
+      if (grantedNow) {
+        return ensureTrackingAccess(
+          context: context,
+          channel: channel,
+          syncBackgroundGeofences: syncBackgroundGeofences,
+          setStatus: setStatus,
+          setBackgroundPermissionGranted: setBackgroundPermissionGranted,
+        );
+      }
+
       setStatus(
         'Location permission denied. Allow location access to start tracking.',
       );
@@ -72,6 +86,23 @@ class TrackingAccessController {
     }
 
     if (!permissionStatus.notificationPermissionGranted) {
+      final bool grantedNow =
+          await LocationPermissionService.checkAndRequestNotificationPermission(
+        channel,
+      );
+      if (!context.mounted) {
+        return false;
+      }
+      if (grantedNow) {
+        return ensureTrackingAccess(
+          context: context,
+          channel: channel,
+          syncBackgroundGeofences: syncBackgroundGeofences,
+          setStatus: setStatus,
+          setBackgroundPermissionGranted: setBackgroundPermissionGranted,
+        );
+      }
+
       setStatus(
         'Notification permission is required for reminder alerts while running in the background.',
       );
@@ -80,7 +111,21 @@ class TrackingAccessController {
         title: 'Notifications Needed',
         message:
             'Enable notifications so log reminders can show while the app runs in the background. Open app settings now?',
-        openSettings: () => _openAppSettings(context, channel),
+        openSettings: () => _openNotificationSettings(context, channel),
+      );
+      return false;
+    }
+
+    if (!permissionStatus.batteryOptimizationDisabled) {
+      setStatus(
+        'Disable battery optimization for Lokalog so geofence logging keeps running when the app is closed.',
+      );
+      await _promptAndOpenSettingsIfRequested(
+        context,
+        title: 'Background Run Needed',
+        message:
+            'Set battery to Unrestricted (or disable optimization) for Lokalog to keep background logging active. Open Battery settings now?',
+        openSettings: () => _openBatteryOptimizationSettings(context, channel),
       );
       return false;
     }
@@ -223,6 +268,60 @@ class TrackingAccessController {
         return;
       }
       UiFeedbackService.showMessage(context, 'Could not open App settings.');
+    }
+  }
+
+  static Future<void> _openNotificationSettings(
+    BuildContext context,
+    MethodChannel channel,
+  ) async {
+    try {
+      final bool opened =
+          await LocationPermissionService.openNotificationSettings(channel);
+      if (!opened) {
+        if (!context.mounted) {
+          return;
+        }
+        UiFeedbackService.showMessage(
+          context,
+          'Could not open Notification settings directly. Open App settings for Lokalog and enable Notifications.',
+        );
+      }
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+      UiFeedbackService.showMessage(
+        context,
+        'Could not open Notification settings.',
+      );
+    }
+  }
+
+  static Future<void> _openBatteryOptimizationSettings(
+    BuildContext context,
+    MethodChannel channel,
+  ) async {
+    try {
+      final bool opened =
+          await LocationPermissionService.openBatteryOptimizationSettings(
+        channel,
+      );
+      if (!opened) {
+        if (!context.mounted) {
+          return;
+        }
+        UiFeedbackService.showMessage(
+          context,
+          'Open App info for Lokalog, then Battery > Unrestricted.',
+        );
+      }
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+      UiFeedbackService.showMessage(
+          context, 'Could not open Battery optimization settings.');
     }
   }
 

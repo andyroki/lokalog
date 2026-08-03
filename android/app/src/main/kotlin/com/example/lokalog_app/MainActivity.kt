@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.CalendarContract
 import android.provider.Settings
 import android.location.LocationManager
@@ -96,6 +97,10 @@ class MainActivity : FlutterActivity() {
 						result.success(isLocationServiceEnabled())
 					}
 
+					"hasLocationPermission" -> {
+						result.success(hasLocationPermission())
+					}
+
 					"checkAndRequestPermission" -> {
 						checkAndRequestPermission(result)
 					}
@@ -151,6 +156,10 @@ class MainActivity : FlutterActivity() {
 						result.success(hasNotificationPermission())
 					}
 
+					"isIgnoringBatteryOptimizations" -> {
+						result.success(isIgnoringBatteryOptimizations())
+					}
+
 					"checkAndRequestNotificationPermission" -> {
 						checkAndRequestNotificationPermission(result)
 					}
@@ -171,6 +180,14 @@ class MainActivity : FlutterActivity() {
 
 					"openAppSettings" -> {
 						openAppSettings(result)
+					}
+
+					"openNotificationSettings" -> {
+						openNotificationSettings(result)
+					}
+
+					"openBatteryOptimizationSettings" -> {
+						openBatteryOptimizationSettings(result)
 					}
 
 					"hasUsageAccessPermission" -> {
@@ -383,6 +400,33 @@ class MainActivity : FlutterActivity() {
 		}
 	}
 
+	private fun openNotificationSettings(result: MethodChannel.Result) {
+		try {
+			val intents = listOf(
+				Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+					putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+					putExtra("android.provider.extra.APP_PACKAGE", packageName)
+				},
+				Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+					data = Uri.parse("package:$packageName")
+				}
+			)
+
+			for (intent in intents) {
+				intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+				if (intent.resolveActivity(packageManager) != null) {
+					startActivity(intent)
+					result.success(true)
+					return
+				}
+			}
+
+			result.success(false)
+		} catch (error: Exception) {
+			result.error("OPEN_SETTINGS_FAILED", error.message, null)
+		}
+	}
+
 	private fun openUsageAccessSettings(result: MethodChannel.Result) {
 		try {
 			val intents = listOf(
@@ -409,6 +453,40 @@ class MainActivity : FlutterActivity() {
 			result.success(false)
 		} catch (error: Exception) {
 			Log.w("LokaLog", "Failed to open Usage Access settings", error)
+			result.success(false)
+		}
+	}
+
+	private fun openBatteryOptimizationSettings(result: MethodChannel.Result) {
+		try {
+			val intents = listOf(
+				Intent("android.settings.APP_BATTERY_SETTINGS").apply {
+					putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+					putExtra("android.provider.extra.APP_PACKAGE", packageName)
+					putExtra("package_name", packageName)
+				},
+				Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+					data = Uri.parse("package:$packageName")
+				},
+				Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+				Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS),
+				Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+					data = Uri.parse("package:$packageName")
+				}
+			)
+
+			for (intent in intents) {
+				intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+				if (intent.resolveActivity(packageManager) != null) {
+					startActivity(intent)
+					result.success(true)
+					return
+				}
+			}
+
+			result.success(false)
+		} catch (error: Exception) {
+			Log.w("LokaLog", "Failed to open battery optimization settings", error)
 			result.success(false)
 		}
 	}
@@ -468,6 +546,14 @@ class MainActivity : FlutterActivity() {
 			)
 		}
 		return mode == AppOpsManager.MODE_ALLOWED
+	}
+
+	private fun isIgnoringBatteryOptimizations(): Boolean {
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+			return true
+		}
+		val manager = getSystemService(POWER_SERVICE) as PowerManager
+		return manager.isIgnoringBatteryOptimizations(packageName)
 	}
 
 	private fun checkAndRequestPermission(result: MethodChannel.Result) {

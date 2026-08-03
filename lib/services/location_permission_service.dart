@@ -4,6 +4,7 @@ class LocationPermissionChannelMethods {
   const LocationPermissionChannelMethods._();
 
   static const String isLocationServiceEnabled = 'isLocationServiceEnabled';
+  static const String hasLocationPermission = 'hasLocationPermission';
   static const String checkAndRequestPermission = 'checkAndRequestPermission';
   static const String hasBackgroundLocationPermission =
       'hasBackgroundLocationPermission';
@@ -11,9 +12,14 @@ class LocationPermissionChannelMethods {
   static const String clearBackgroundGeofences = 'clearBackgroundGeofences';
   static const String openLocationSettings = 'openLocationSettings';
   static const String openAppSettings = 'openAppSettings';
+  static const String openNotificationSettings = 'openNotificationSettings';
   static const String hasNotificationPermission = 'hasNotificationPermission';
   static const String checkAndRequestNotificationPermission =
       'checkAndRequestNotificationPermission';
+  static const String isIgnoringBatteryOptimizations =
+      'isIgnoringBatteryOptimizations';
+  static const String openBatteryOptimizationSettings =
+      'openBatteryOptimizationSettings';
 }
 
 class LocationPermissionStatus {
@@ -22,12 +28,14 @@ class LocationPermissionStatus {
     required this.foregroundPermissionGranted,
     required this.backgroundPermissionGranted,
     required this.notificationPermissionGranted,
+    required this.batteryOptimizationDisabled,
   });
 
   final bool serviceEnabled;
   final bool foregroundPermissionGranted;
   final bool backgroundPermissionGranted;
   final bool notificationPermissionGranted;
+  final bool batteryOptimizationDisabled;
 }
 
 class LocationPermissionService {
@@ -41,30 +49,35 @@ class LocationPermissionService {
         foregroundPermissionGranted: false,
         backgroundPermissionGranted: false,
         notificationPermissionGranted: false,
+        batteryOptimizationDisabled: false,
       );
     }
 
     final bool foregroundPermissionGranted =
-        await checkAndRequestPermission(channel);
+        await hasLocationPermission(channel);
     if (!foregroundPermissionGranted) {
       return const LocationPermissionStatus(
         serviceEnabled: true,
         foregroundPermissionGranted: false,
         backgroundPermissionGranted: false,
         notificationPermissionGranted: false,
+        batteryOptimizationDisabled: false,
       );
     }
 
     final bool backgroundPermissionGranted =
         await hasBackgroundLocationPermission(channel);
     final bool notificationPermissionGranted =
-        await checkAndRequestNotificationPermission(channel);
+        await hasNotificationPermission(channel);
+    final bool batteryOptimizationDisabled =
+        await isIgnoringBatteryOptimizations(channel);
 
     return LocationPermissionStatus(
       serviceEnabled: serviceEnabled,
       foregroundPermissionGranted: foregroundPermissionGranted,
       backgroundPermissionGranted: backgroundPermissionGranted,
       notificationPermissionGranted: notificationPermissionGranted,
+      batteryOptimizationDisabled: batteryOptimizationDisabled,
     );
   }
 
@@ -79,6 +92,13 @@ class LocationPermissionService {
     return _invokeBool(
       channel,
       LocationPermissionChannelMethods.checkAndRequestPermission,
+    );
+  }
+
+  static Future<bool> hasLocationPermission(MethodChannel channel) async {
+    return _invokeBool(
+      channel,
+      LocationPermissionChannelMethods.hasLocationPermission,
     );
   }
 
@@ -119,6 +139,13 @@ class LocationPermissionService {
     );
   }
 
+  static Future<bool> openNotificationSettings(MethodChannel channel) async {
+    return _invokeBool(
+      channel,
+      LocationPermissionChannelMethods.openNotificationSettings,
+    );
+  }
+
   static Future<bool> hasNotificationPermission(MethodChannel channel) async {
     return _invokeBool(
       channel,
@@ -132,6 +159,24 @@ class LocationPermissionService {
     return _invokeBool(
       channel,
       LocationPermissionChannelMethods.checkAndRequestNotificationPermission,
+    );
+  }
+
+  static Future<bool> isIgnoringBatteryOptimizations(
+    MethodChannel channel,
+  ) async {
+    return _invokeBool(
+      channel,
+      LocationPermissionChannelMethods.isIgnoringBatteryOptimizations,
+    );
+  }
+
+  static Future<bool> openBatteryOptimizationSettings(
+    MethodChannel channel,
+  ) async {
+    return _invokeBool(
+      channel,
+      LocationPermissionChannelMethods.openBatteryOptimizationSettings,
     );
   }
 

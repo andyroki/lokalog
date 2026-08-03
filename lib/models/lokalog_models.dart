@@ -19,6 +19,7 @@ class LocationTrackingState {
     required this.inGeofence,
     required this.outOfGeofence,
     required this.logged,
+    required this.loggedStateReason,
     required this.waitingToGetLogged,
     required this.timeInGeofenceMinutes,
     required this.remainingMinutes,
@@ -31,6 +32,7 @@ class LocationTrackingState {
   final bool inGeofence;
   final bool outOfGeofence;
   final bool logged;
+  final String loggedStateReason;
   final bool waitingToGetLogged;
   final double timeInGeofenceMinutes;
   final double remainingMinutes;

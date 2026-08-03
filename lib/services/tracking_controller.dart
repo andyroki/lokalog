@@ -13,6 +13,7 @@ class TrackingProcessResult {
     required this.inGeofence,
     required this.effectiveRadiusMeters,
     required this.shouldPrompt,
+    required this.loggedStateReasonUpdates,
     this.promptSite,
   });
 
@@ -25,6 +26,7 @@ class TrackingProcessResult {
   final bool inGeofence;
   final double effectiveRadiusMeters;
   final bool shouldPrompt;
+  final Map<String, String> loggedStateReasonUpdates;
   final JobSite? promptSite;
 }
 
@@ -61,6 +63,7 @@ class TrackingController {
         inGeofence: false,
         effectiveRadiusMeters: matchRadiusMeters,
         shouldPrompt: false,
+        loggedStateReasonUpdates: <String, String>{},
       );
     }
 
@@ -77,6 +80,7 @@ class TrackingController {
     JobSite? nextCandidateSite;
     double candidateDistance = double.infinity;
     final double increment = elapsedMinutes < 0 ? 0 : elapsedMinutes;
+    final Map<String, String> loggedStateReasonUpdates = <String, String>{};
 
     for (final JobSite site in sites) {
       final double distance = LocationTrackingCalculator.distanceMetersBetween(
@@ -124,6 +128,8 @@ class TrackingController {
             sessionLoggedAddresses.remove(site.address);
             outOfGeofenceSince.remove(site.address);
             timeInGeofenceMinutes[site.address] = 0;
+            loggedStateReasonUpdates[site.address] =
+                'Not logged: cleared after out-of-geofence retrigger elapsed.';
           }
         }
         continue;
@@ -168,6 +174,7 @@ class TrackingController {
       inGeofence: nearestInGeofence,
       effectiveRadiusMeters: effectiveRadius,
       shouldPrompt: shouldPrompt,
+      loggedStateReasonUpdates: loggedStateReasonUpdates,
       promptSite: shouldPrompt ? nextCandidateSite : null,
     );
   }

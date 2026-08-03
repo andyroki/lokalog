@@ -138,10 +138,15 @@ object GeofenceBackground {
             prefs.getString(BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY, "{}") ?: "{}"
         )
         val outSinceMillis = outMap.optLong(site.address, -1L)
-        if (outSinceMillis <= 0L) {
+        val hasExistingLogForSite = hasBackgroundLogForSite(prefs, site.address)
+
+        // First background log for a site does not require prior EXIT evidence.
+        if (hasExistingLogForSite && outSinceMillis <= 0L) {
             return false
         }
-        if (nowMillis - outSinceMillis < retriggerMillis) {
+
+        // Repeat logs require enough out-of-geofence time before the next DWELL log.
+        if (hasExistingLogForSite && nowMillis - outSinceMillis < retriggerMillis) {
             return false
         }
 
@@ -165,6 +170,20 @@ object GeofenceBackground {
         prefs.edit().putString(BACKGROUND_OUT_OF_GEOFENCE_SINCE_KEY, outMap.toString()).apply()
 
         return true
+    }
+
+    private fun hasBackgroundLogForSite(
+        prefs: android.content.SharedPreferences,
+        address: String
+    ): Boolean {
+        val current = JSONArray(prefs.getString(BACKGROUND_LOGS_KEY, "[]") ?: "[]")
+        for (index in 0 until current.length()) {
+            val item = current.optJSONObject(index) ?: continue
+            if (item.optString("address") == address) {
+                return true
+            }
+        }
+        return false
     }
 
     fun markBackgroundOutOfGeofenceSince(context: Context, site: SavedSite, nowMillis: Long) {
@@ -222,9 +241,10 @@ object GeofenceBackground {
             builder.setContentIntent(contentIntent)
         }
 
-        val notificationId = BACKGROUND_LOG_NOTIFICATION_BASE_ID +
-            (System.currentTimeMillis() % 1000).toInt()
-        NotificationManagerCompat.from(context).notify(notificationId, builder.build())
+        val notificationId = backgroundLogNotificationId(site)
+        val notificationManager = NotificationManagerCompat.from(context)
+        notificationManager.cancel(notificationId)
+        notificationManager.notify(notificationId, builder.build())
     }
 
     fun findSiteById(context: Context, id: String): SavedSite? {
@@ -267,6 +287,11 @@ object GeofenceBackground {
             sites.add(SavedSite.fromJson(item))
         }
         return sites
+    }
+
+    private fun backgroundLogNotificationId(site: SavedSite): Int {
+        val siteHash = site.id.hashCode() and Int.MAX_VALUE
+        return BACKGROUND_LOG_NOTIFICATION_BASE_ID + (siteHash % 10_000)
     }
 
     private fun geofencePendingIntent(context: Context): PendingIntent {
@@ -337,7 +362,6 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
 
             if (transition == Geofence.GEOFENCE_TRANSITION_ENTER) {
-                GeofenceBackground.clearBackgroundOutOfGeofenceSince(context, site)
                 return@forEach
             }
 
