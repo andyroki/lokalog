@@ -44,6 +44,9 @@ class MainActivity : FlutterActivity() {
 	private val notificationPermissionRequestCode = 1002
 	private val logReminderChannelId = "lokalog_log_reminder_channel"
 	private val logReminderNotificationId = 7301
+	private val logReminderNotificationDebounceMillis = 120_000L
+	private var lastReminderFingerprint: String? = null
+	private var lastReminderShownAtMillis: Long = 0L
 	private var permissionResult: MethodChannel.Result? = null
 	private var notificationPermissionResult: MethodChannel.Result? = null
 
@@ -339,6 +342,15 @@ class MainActivity : FlutterActivity() {
 		ensureLogReminderNotificationChannel()
 		val customerLabel = if (name.isNullOrBlank()) "Client" else name
 		val message = "$customerLabel at $address. Auto-log in ${countdownSeconds}s if no response."
+		val nowMillis = System.currentTimeMillis()
+		val fingerprint = "$address|$message"
+		if (lastReminderFingerprint == fingerprint &&
+			nowMillis - lastReminderShownAtMillis < logReminderNotificationDebounceMillis
+		) {
+			return
+		}
+		lastReminderFingerprint = fingerprint
+		lastReminderShownAtMillis = nowMillis
 
 		val notification = NotificationCompat.Builder(this, logReminderChannelId)
 			.setSmallIcon(android.R.drawable.ic_dialog_info)
@@ -346,6 +358,8 @@ class MainActivity : FlutterActivity() {
 			.setContentText(message)
 			.setStyle(NotificationCompat.BigTextStyle().bigText(message))
 			.setPriority(NotificationCompat.PRIORITY_HIGH)
+			.setOnlyAlertOnce(true)
+			.setTimeoutAfter(((countdownSeconds + 3).coerceAtLeast(6) * 1000).toLong())
 			.setAutoCancel(true)
 			.build()
 
@@ -353,6 +367,8 @@ class MainActivity : FlutterActivity() {
 	}
 
 	private fun cancelLogReminderNotification() {
+		lastReminderFingerprint = null
+		lastReminderShownAtMillis = 0L
 		NotificationManagerCompat.from(this).cancel(logReminderNotificationId)
 	}
 
