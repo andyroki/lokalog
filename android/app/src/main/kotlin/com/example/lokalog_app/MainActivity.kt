@@ -47,6 +47,8 @@ class MainActivity : FlutterActivity() {
 	private val logReminderNotificationDebounceMillis = 120_000L
 	private var lastReminderFingerprint: String? = null
 	private var lastReminderShownAtMillis: Long = 0L
+	private var activeReminderAddress: String? = null
+	private var activeReminderExpiresAtMillis: Long = 0L
 	private var permissionResult: MethodChannel.Result? = null
 	private var notificationPermissionResult: MethodChannel.Result? = null
 
@@ -341,8 +343,15 @@ class MainActivity : FlutterActivity() {
 
 		ensureLogReminderNotificationChannel()
 		val customerLabel = if (name.isNullOrBlank()) "Client" else name
-		val message = "$customerLabel at $address. Auto-log in ${countdownSeconds}s if no response."
+		val safeCountdownSeconds = countdownSeconds.coerceIn(3, 120)
+		val message = "$customerLabel at $address. Auto-log in ${safeCountdownSeconds}s if no response."
 		val nowMillis = System.currentTimeMillis()
+		if (hasActiveLogReminderNotification()) {
+			return
+		}
+		if (activeReminderExpiresAtMillis > nowMillis) {
+			return
+		}
 		val fingerprint = "$address|$message"
 		if (lastReminderFingerprint == fingerprint &&
 			nowMillis - lastReminderShownAtMillis < logReminderNotificationDebounceMillis
@@ -351,6 +360,9 @@ class MainActivity : FlutterActivity() {
 		}
 		lastReminderFingerprint = fingerprint
 		lastReminderShownAtMillis = nowMillis
+		val timeoutMillis = ((safeCountdownSeconds + 3).coerceAtLeast(6) * 1000).toLong()
+		activeReminderAddress = address
+		activeReminderExpiresAtMillis = nowMillis + timeoutMillis
 
 		val notification = NotificationCompat.Builder(this, logReminderChannelId)
 			.setSmallIcon(android.R.drawable.ic_dialog_info)
@@ -358,8 +370,10 @@ class MainActivity : FlutterActivity() {
 			.setContentText(message)
 			.setStyle(NotificationCompat.BigTextStyle().bigText(message))
 			.setPriority(NotificationCompat.PRIORITY_HIGH)
+			.setLocalOnly(true)
+			.setSilent(true)
 			.setOnlyAlertOnce(true)
-			.setTimeoutAfter(((countdownSeconds + 3).coerceAtLeast(6) * 1000).toLong())
+			.setTimeoutAfter(timeoutMillis)
 			.setAutoCancel(true)
 			.build()
 
@@ -369,7 +383,20 @@ class MainActivity : FlutterActivity() {
 	private fun cancelLogReminderNotification() {
 		lastReminderFingerprint = null
 		lastReminderShownAtMillis = 0L
+		activeReminderAddress = null
+		activeReminderExpiresAtMillis = 0L
 		NotificationManagerCompat.from(this).cancel(logReminderNotificationId)
+	}
+
+	private fun hasActiveLogReminderNotification(): Boolean {
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+			return false
+		}
+
+		val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+		return manager.activeNotifications.any { statusBarNotification ->
+			statusBarNotification.id == logReminderNotificationId
+		}
 	}
 
 	private fun ensureLogReminderNotificationChannel() {
