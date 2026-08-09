@@ -30,7 +30,7 @@ private const val DEFAULT_GEOFENCE_RADIUS_METERS = 200f
 private const val DEFAULT_OUT_OF_GEOFENCE_RETRIGGER_MINUTES = 20L
 private const val BACKGROUND_LOG_CHANNEL_ID = "lokalog_background_log_channel"
 private const val BACKGROUND_LOG_CHANNEL_NAME = "Background logging"
-private const val BACKGROUND_LOG_NOTIFICATION_BASE_ID = 8400
+private const val BACKGROUND_LOG_NOTIFICATION_ID = 8400
 
 object GeofenceBackground {
     fun clearGeofences(context: Context) {
@@ -241,10 +241,9 @@ object GeofenceBackground {
             builder.setContentIntent(contentIntent)
         }
 
-        val notificationId = backgroundLogNotificationId(site)
         val notificationManager = NotificationManagerCompat.from(context)
-        notificationManager.cancel(notificationId)
-        notificationManager.notify(notificationId, builder.build())
+        notificationManager.cancel(BACKGROUND_LOG_NOTIFICATION_ID)
+        notificationManager.notify(BACKGROUND_LOG_NOTIFICATION_ID, builder.build())
     }
 
     fun findSiteById(context: Context, id: String): SavedSite? {
@@ -287,11 +286,6 @@ object GeofenceBackground {
             sites.add(SavedSite.fromJson(item))
         }
         return sites
-    }
-
-    private fun backgroundLogNotificationId(site: SavedSite): Int {
-        val siteHash = site.id.hashCode() and Int.MAX_VALUE
-        return BACKGROUND_LOG_NOTIFICATION_BASE_ID + (siteHash % 10_000)
     }
 
     private fun geofencePendingIntent(context: Context): PendingIntent {
