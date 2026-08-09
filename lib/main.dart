@@ -316,7 +316,8 @@ class _ScenarioPageState extends State<ScenarioPage>
   Set<String> get _calendarAddedLogKeys => _state.calendarAddedLogKeys;
   Set<String> get _sessionLoggedAddresses => _state.sessionLoggedAddresses;
   final Set<String> _debugRetriggerArmedAddresses = <String>{};
-    final Map<String, String> _loggedStateReasonsByAddress =
+  final Set<String> _readyToLogNotifiedAddresses = <String>{};
+  final Map<String, String> _loggedStateReasonsByAddress =
       <String, String>{};
   Map<String, double> get _timeInGeofenceMinutesBySite =>
       _state.timeInGeofenceMinutes;
@@ -2008,6 +2009,9 @@ class _ScenarioPageState extends State<ScenarioPage>
       _tracking.stableSamples = result.stableSamples;
       _gpsState.latestNearest = result.latestNearest;
       _loggedStateReasonsByAddress.addAll(result.loggedStateReasonUpdates);
+      for (final String address in result.loggedStateReasonUpdates.keys) {
+        _readyToLogNotifiedAddresses.remove(address);
+      }
       _tracking.status = _buildStatusText(
         nearest: result.latestNearest!,
         goodAccuracy: result.goodAccuracy,
@@ -2080,11 +2084,19 @@ class _ScenarioPageState extends State<ScenarioPage>
     if (!_canPromptForSite(site, DateTime.now())) {
       return;
     }
+    final bool shouldNotify =
+        !_sessionLoggedAddresses.contains(site.address) &&
+            !_readyToLogNotifiedAddresses.contains(site.address);
     setState(() {
       _geofence.setPending(site, 12);
+      if (shouldNotify) {
+        _readyToLogNotifiedAddresses.add(site.address);
+      }
     });
     _tracking.promptTimer?.cancel();
-    unawaited(_showLogReminderNotification(site, _geofence.promptCountdown));
+    if (shouldNotify) {
+      unawaited(_showLogReminderNotification(site, _geofence.promptCountdown));
+    }
     _tracking.promptTimer =
         Timer.periodic(const Duration(seconds: 1), (Timer timer) {
       if (!mounted) {
@@ -2382,6 +2394,7 @@ class _ScenarioPageState extends State<ScenarioPage>
     setState(() {
       _sessionLoggedAddresses.remove(site.address);
       _debugRetriggerArmedAddresses.add(site.address);
+      _readyToLogNotifiedAddresses.remove(site.address);
       _loggedStateReasonsByAddress[site.address] =
           'Not logged: cleared by Debug Retrigger.';
       _outOfGeofenceSince.remove(site.address);

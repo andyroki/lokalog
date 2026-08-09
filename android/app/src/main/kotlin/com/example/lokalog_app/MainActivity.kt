@@ -49,6 +49,7 @@ class MainActivity : FlutterActivity() {
 	private var lastReminderShownAtMillis: Long = 0L
 	private var activeReminderAddress: String? = null
 	private var activeReminderExpiresAtMillis: Long = 0L
+	private var reminderAttemptCounter: Long = 0L
 	private var permissionResult: MethodChannel.Result? = null
 	private var notificationPermissionResult: MethodChannel.Result? = null
 
@@ -344,8 +345,14 @@ class MainActivity : FlutterActivity() {
 		ensureLogReminderNotificationChannel()
 		val customerLabel = if (name.isNullOrBlank()) "Client" else name
 		val safeCountdownSeconds = countdownSeconds.coerceIn(3, 120)
-		val message = "$customerLabel at $address. Auto-log in ${safeCountdownSeconds}s if no response."
 		val nowMillis = System.currentTimeMillis()
+		val nextAttempt = reminderAttemptCounter + 1
+		val activeAtStart = hasActiveLogReminderNotification()
+		val remainingAtStartMillis = (activeReminderExpiresAtMillis - nowMillis).coerceAtLeast(0L)
+		val previousActiveAddress = activeReminderAddress
+		val sinceLastShownMillis =
+			if (lastReminderShownAtMillis > 0L) nowMillis - lastReminderShownAtMillis else -1L
+		val message = "$customerLabel at $address. Auto-log in ${safeCountdownSeconds}s if no response."
 		if (hasActiveLogReminderNotification()) {
 			return
 		}
@@ -358,17 +365,22 @@ class MainActivity : FlutterActivity() {
 		) {
 			return
 		}
+		reminderAttemptCounter = nextAttempt
 		lastReminderFingerprint = fingerprint
 		lastReminderShownAtMillis = nowMillis
 		val timeoutMillis = ((safeCountdownSeconds + 3).coerceAtLeast(6) * 1000).toLong()
 		activeReminderAddress = address
 		activeReminderExpiresAtMillis = nowMillis + timeoutMillis
 
+		val debugInfo = "dbg:try=$nextAttempt ts=$nowMillis fp=${fingerprint.hashCode()} " +
+			"active=$activeAtStart remMs=$remainingAtStartMillis " +
+			"lastAgoMs=$sinceLastShownMillis prevAddr=${previousActiveAddress ?: "none"}"
+
 		val notification = NotificationCompat.Builder(this, logReminderChannelId)
 			.setSmallIcon(android.R.drawable.ic_dialog_info)
 			.setContentTitle("Lokalog reminder")
 			.setContentText(message)
-			.setStyle(NotificationCompat.BigTextStyle().bigText(message))
+			.setStyle(NotificationCompat.BigTextStyle().bigText("$message\n$debugInfo"))
 			.setPriority(NotificationCompat.PRIORITY_HIGH)
 			.setLocalOnly(true)
 			.setSilent(true)
